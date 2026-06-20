@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""
+Prepare the Morse HaLow Zephyr module for the nRF54L15 DK PlatformIO build.
+"""
+Import("env")
+
+import os
+import shutil
+from pathlib import Path
+
+PROJECT_DIR = Path(env.subst("$PROJECT_DIR")).resolve()
+module_root = (PROJECT_DIR / "third_party" / "mm-iot-zephyr").resolve()
+fallback_roots = [
+    Path(os.environ["MMIOT_ZEPHYR_ROOT"]).expanduser().resolve() if "MMIOT_ZEPHYR_ROOT" in os.environ else None,
+    (PROJECT_DIR / ".." / "mm-iot-zephyr").resolve(),
+    (PROJECT_DIR / ".." / "edge-device-nrf54" / "modules" / "mm-iot-zephyr").resolve(),
+]
+
+
+def is_complete_morse_module(path):
+    return (
+        path.exists()
+        and (path / "CMakeLists.txt").exists()
+        and (path / "components" / "morse_sm" / "hostap" / "morse_mbedtls_config.h").exists()
+    )
+
+
+mm_root = module_root
+if not is_complete_morse_module(mm_root):
+    mm_root = next((root for root in fallback_roots if root is not None and is_complete_morse_module(root)), module_root)
+
+if not is_complete_morse_module(mm_root):
+    print("ERROR: Morse Zephyr module is missing.")
+    print("Initialize third_party/mm-iot-zephyr or set MMIOT_ZEPHYR_ROOT to a complete checkout.")
+    env.Exit(1)
+
+
+def first_existing(paths):
+    for path in paths:
+        if path.exists():
+            return path
+    return None
+
+
+env.setdefault("ENV", {})
+env["ENV"]["MORSE_ZEPHYR_MODULE"] = str(mm_root)
+os.environ["MORSE_ZEPHYR_MODULE"] = str(mm_root)
+
+project_bcf = PROJECT_DIR / "bcf_HC01.mbin"
+blob_dir = mm_root / "zephyr" / "blobs"
+staged_files = [
+    (
+        first_existing(
+            [
+                mm_root / "zephyr" / "blobs" / "lib" / "mm6108" / "arm-cortex-m33f" / "libmorse.a",
+                mm_root / "submodules" / "mm-iot-sdk" / "framework" / "morselib" / "lib" / "arm-cortex-m33f" / "libmorse.a",
+            ]
+        ),
+        blob_dir / "lib" / "mm6108" / "arm-cortex-m33f" / "libmorse.a",
+        "libmorse.a",
+    ),
+    (
+        first_existing(
+            [
+                mm_root / "zephyr" / "blobs" / "firmware" / "mm6108.mbin",
+                mm_root / "submodules" / "mm-iot-sdk" / "framework" / "morsefirmware" / "mm6108.mbin",
+            ]
+        ),
+        blob_dir / "firmware" / "mm6108.mbin",
+        "mm6108.mbin",
+    ),
+    (
+        first_existing(
+            [
+                project_bcf,
+                mm_root / "zephyr" / "blobs" / "firmware" / "bcf_HC01.mbin",
+                mm_root / "submodules" / "mm-iot-sdk" / "framework" / "morsefirmware" / "mm6108" / "bcfs" / "bcf_HC01.mbin",
+            ]
+        ),
+        blob_dir / "firmware" / "bcf_HC01.mbin",
+        "bcf_HC01.mbin",
+    ),
+]
+
+for src, dst, label in staged_files:
+    if src is None:
+        print(f"ERROR: {label} not found in project or Morse module checkout")
+        env.Exit(1)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if not dst.exists() or src.read_bytes() != dst.read_bytes():
+        shutil.copyfile(src, dst)
+        print(f"Staged {label}: {dst}")
+
+env["ENV"]["MORSE_SM_USE_APP_BINARIES"] = "1"
+os.environ["MORSE_SM_USE_APP_BINARIES"] = "1"
+
+print(f"Using Morse Zephyr module: {mm_root}")

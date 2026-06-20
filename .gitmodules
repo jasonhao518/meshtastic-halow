@@ -8,3 +8,6 @@
 	path = third_party/mm-iot-esp32
 	url = https://github.com/edgez-ai/mm-iot-esp32-mesh.git
 	branch = mesh_single
+[submodule "third_party/mm-iot-zephyr"]
+	path = third_party/mm-iot-zephyr
+	url = https://github.com/edgez-ai/mm-iot-zephyr-mesh.git
