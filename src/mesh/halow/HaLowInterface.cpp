@@ -6,6 +6,7 @@
 #include "Channels.h"
 #include "MeshRadio.h"
 #include "MeshTypes.h"
+#include "NodeDB.h"
 #include "RTC.h" // getValidTime / RTCQualityFromNet
 #include "Throttle.h"
 #include "main.h"
@@ -190,6 +191,14 @@ void HaLowInterface::staEventTrampoline(const struct mmwlan_sta_event_cb_args *s
         self->onStaEvent(sta_event);
     }
 }
+
+void HaLowInterface::beaconVendorIeTrampoline(const uint8_t *ies, uint32_t ies_len, void *arg)
+{
+    HaLowInterface *self = static_cast<HaLowInterface *>(arg);
+    if (self) {
+        self->onDiscoveryVendorIes(ies, ies_len, 0);
+    }
+}
 #endif
 
 HaLowInterface::~HaLowInterface() = default;
@@ -338,9 +347,208 @@ bool HaLowInterface::loadMeshProfile()
         bytesToHex(psk, pskLen, meshKey, sizeof(meshKey));
     }
 
+    buildDiscoveryVendorIe();
+
     LOG_INFO("HaLow: profile from Meshtastic country=%s mesh_id='%s' key=%s", countryCode, meshId,
              meshKey[0] ? "primary-channel" : "open");
     return true;
+}
+
+void HaLowInterface::buildDiscoveryVendorIe()
+{
+    discoveryVendorIeLen = 0;
+    uint8_t payload[MAX_DISCOVERY_VENDOR_IES * MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN] = {0};
+    size_t payloadLen = 0;
+
+    int16_t channelHash = channels.getHash(channels.getPrimaryIndex());
+    NodeNum nodeNum = nodeDB ? nodeDB->getNodeNum() : 0;
+    if (channelHash < 0 || nodeNum == 0) {
+        return;
+    }
+
+    auto putByte = [&](uint8_t v) -> bool {
+        if (payloadLen >= sizeof(payload)) {
+            return false;
+        }
+        payload[payloadLen++] = v;
+        return true;
+    };
+    auto putBytes = [&](const uint8_t *data, size_t len) -> bool {
+        if (payloadLen + len > sizeof(payload)) {
+            return false;
+        }
+        if (len > 0) {
+            memcpy(payload + payloadLen, data, len);
+        }
+        payloadLen += len;
+        return true;
+    };
+    auto putString = [&](const char *s, size_t maxLen) -> bool {
+        size_t len = s ? strnlen(s, maxLen) : 0;
+        if (len > 39) {
+            len = 39;
+        }
+        return putByte((uint8_t)len) && putBytes((const uint8_t *)s, len);
+    };
+
+    if (!putByte((uint8_t)channelHash) || !putBytes((const uint8_t *)&nodeNum, sizeof(nodeNum)) ||
+        !putByte((uint8_t)owner.hw_model) || !putByte((uint8_t)owner.role) || !putByte(owner.is_licensed ? 1 : 0) ||
+        !putString(owner.short_name, sizeof(owner.short_name)) || !putString(owner.long_name, sizeof(owner.long_name))) {
+        return;
+    }
+
+    size_t fragCount = (payloadLen + MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN - 1) / MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN;
+    if (fragCount == 0 || fragCount > MAX_DISCOVERY_VENDOR_IES) {
+        return;
+    }
+
+    size_t src = 0;
+    size_t outPos = 0;
+    for (size_t frag = 0; frag < fragCount; frag++) {
+        size_t fragPayloadLen = payloadLen - src;
+        if (fragPayloadLen > MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN) {
+            fragPayloadLen = MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN;
+        }
+        uint8_t *out = discoveryVendorIe + outPos;
+        out[0] = WLAN_IE_ID_VENDOR_SPECIFIC;
+        out[1] = (uint8_t)(MESHTASTIC_VENDOR_HEADER_LEN + fragPayloadLen);
+        memcpy(out + 2, MESHTASTIC_VENDOR_OUI, sizeof(MESHTASTIC_VENDOR_OUI));
+        out[5] = MESHTASTIC_VENDOR_TYPE_NODEINFO;
+        out[6] = MESHTASTIC_VENDOR_VERSION;
+        out[7] = (uint8_t)frag;
+        out[8] = (uint8_t)fragCount;
+        memcpy(out + 2 + MESHTASTIC_VENDOR_HEADER_LEN, payload + src, fragPayloadLen);
+        src += fragPayloadLen;
+        outPos += 2 + MESHTASTIC_VENDOR_HEADER_LEN + fragPayloadLen;
+    }
+
+    discoveryVendorIeLen = outPos;
+    LOG_INFO("HaLow: Meshtastic vendor IE ready node=0x%08x hash=0x%02x len=%u", nodeNum, (uint8_t)channelHash,
+             (unsigned)discoveryVendorIeLen);
+}
+
+void HaLowInterface::onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int8_t rssi)
+{
+    if (!ies || !nodeDB) {
+        return;
+    }
+
+    uint8_t reassembled[MAX_DISCOVERY_VENDOR_IES * MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN] = {0};
+    size_t fragLens[MAX_DISCOVERY_VENDOR_IES] = {0};
+    bool fragSeen[MAX_DISCOVERY_VENDOR_IES] = {false};
+    uint8_t expectedFrags = 0;
+
+    size_t off = 0;
+    while (off + 2 <= iesLen) {
+        uint8_t eid = ies[off];
+        uint8_t len = ies[off + 1];
+        size_t next = off + 2 + len;
+        if (next > iesLen) {
+            break;
+        }
+        const uint8_t *body = ies + off + 2;
+        if (eid == WLAN_IE_ID_VENDOR_SPECIFIC && len >= MESHTASTIC_VENDOR_HEADER_LEN &&
+            memcmp(body, MESHTASTIC_VENDOR_OUI, sizeof(MESHTASTIC_VENDOR_OUI)) == 0 &&
+            body[3] == MESHTASTIC_VENDOR_TYPE_NODEINFO && body[4] == MESHTASTIC_VENDOR_VERSION) {
+            uint8_t fragIndex = body[5];
+            uint8_t fragCount = body[6];
+            size_t fragPayloadLen = len - MESHTASTIC_VENDOR_HEADER_LEN;
+            if (fragCount > 0 && fragCount <= MAX_DISCOVERY_VENDOR_IES && fragIndex < fragCount &&
+                fragPayloadLen <= MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN) {
+                expectedFrags = fragCount;
+                memcpy(reassembled + (fragIndex * MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN),
+                       body + MESHTASTIC_VENDOR_HEADER_LEN, fragPayloadLen);
+                fragLens[fragIndex] = fragPayloadLen;
+                fragSeen[fragIndex] = true;
+            }
+        }
+        off = next;
+    }
+
+    if (expectedFrags == 0) {
+        return;
+    }
+
+    for (uint8_t i = 0; i < expectedFrags; i++) {
+        if (!fragSeen[i]) {
+            LOG_WARN("HaLow: Meshtastic vendor IE missing fragment %u/%u", (unsigned)i, (unsigned)expectedFrags);
+            return;
+        }
+        if (i + 1 < expectedFrags && fragLens[i] != MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN) {
+            LOG_WARN("HaLow: Meshtastic vendor IE short middle fragment %u len=%u", (unsigned)i, (unsigned)fragLens[i]);
+            return;
+        }
+    }
+
+    uint8_t compact[MAX_DISCOVERY_VENDOR_IES * MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN] = {0};
+    size_t compactLen = 0;
+    for (uint8_t i = 0; i < expectedFrags; i++) {
+        memcpy(compact + compactLen, reassembled + (i * MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN), fragLens[i]);
+        compactLen += fragLens[i];
+    }
+
+    size_t pos = 0;
+    auto getByte = [&](uint8_t &v) -> bool {
+        if (pos >= compactLen) {
+            return false;
+        }
+        v = compact[pos++];
+        return true;
+    };
+    auto getBytes = [&](uint8_t *out, size_t len) -> bool {
+        if (pos + len > compactLen) {
+            return false;
+        }
+        memcpy(out, compact + pos, len);
+        pos += len;
+        return true;
+    };
+    auto getString = [&](char *out, size_t outLen) -> bool {
+        uint8_t len = 0;
+        if (!getByte(len) || len >= outLen || pos + len > compactLen) {
+            return false;
+        }
+        memcpy(out, compact + pos, len);
+        out[len] = '\0';
+        pos += len;
+        return true;
+    };
+
+    uint8_t channelHash = 0;
+    NodeNum nodeNum = 0;
+    uint8_t hwModel = 0;
+    uint8_t role = 0;
+    uint8_t flags = 0;
+    meshtastic_User user = meshtastic_User_init_default;
+
+    if (!getByte(channelHash) || !getBytes((uint8_t *)&nodeNum, sizeof(nodeNum)) || !getByte(hwModel) || !getByte(role) ||
+        !getByte(flags) || !getString(user.short_name, sizeof(user.short_name)) || !getString(user.long_name, sizeof(user.long_name))) {
+        LOG_WARN("HaLow: malformed Meshtastic vendor IE payload len=%u", (unsigned)compactLen);
+        return;
+    }
+
+    int16_t localHash = channels.getHash(channels.getPrimaryIndex());
+    if (localHash < 0 || channelHash != (uint8_t)localHash) {
+        LOG_DEBUG("HaLow: ignore vendor NodeInfo hash=0x%02x local=0x%02x", channelHash, (uint8_t)localHash);
+        return;
+    }
+    if (nodeNum == 0 || nodeNum == nodeDB->getNodeNum()) {
+        return;
+    }
+
+    snprintf(user.id, sizeof(user.id), "!%08x", nodeNum);
+    user.hw_model = (meshtastic_HardwareModel)hwModel;
+    user.role = (meshtastic_Config_DeviceConfig_Role)role;
+    user.is_licensed = (flags & 0x01) != 0;
+
+    bool changed = nodeDB->updateUser(nodeNum, user, channels.getPrimaryIndex());
+    meshPeerSeen = true;
+    nodeInfoPingPending = true;
+    lastMeshInfoMs = millis();
+    LOG_INFO("HaLow: vendor NodeInfo %s node=0x%08x short='%s' long='%s' rssi=%d", changed ? "updated" : "seen",
+             nodeNum, user.short_name, user.long_name, rssi);
+    printf("HaLow: vendor NodeInfo %s node=0x%08x short='%s' long='%s' rssi=%d\n", changed ? "updated" : "seen", nodeNum,
+           user.short_name, user.long_name, rssi);
 }
 
 #ifdef USE_MM_IOT_ESP32
@@ -383,6 +591,8 @@ bool HaLowInterface::startMeshStation()
     staArgs.bgscan_long_interval_s = 0;
     staArgs.scan_interval_base_s = MESH_CONNECT_SCAN_BASE_S;
     staArgs.scan_interval_limit_s = MESH_CONNECT_SCAN_LIMIT_S;
+    staArgs.extra_assoc_ies = discoveryVendorIeLen ? discoveryVendorIe : nullptr;
+    staArgs.extra_assoc_ies_len = discoveryVendorIeLen;
     staArgs.mesh_mode = true;
 
     enum mmwlan_status meshStatus = mmwlan_sta_enable(&staArgs, NULL);
@@ -405,6 +615,17 @@ bool HaLowInterface::startMeshStation()
     staCtrlPortOpenCount = 0;
     bestMeshRssi = -32768;
     bestMeshId[0] = '\0';
+
+    memset(&beaconVendorIeFilter, 0, sizeof(beaconVendorIeFilter));
+    beaconVendorIeFilter.cb = beaconVendorIeTrampoline;
+    beaconVendorIeFilter.cb_arg = this;
+    beaconVendorIeFilter.n_ouis = 1;
+    memcpy(beaconVendorIeFilter.ouis[0], MESHTASTIC_VENDOR_OUI, sizeof(MESHTASTIC_VENDOR_OUI));
+    enum mmwlan_status filterStatus = mmwlan_update_beacon_vendor_ie_filter(&beaconVendorIeFilter);
+    if (filterStatus != MMWLAN_SUCCESS) {
+        LOG_WARN("HaLow: beacon vendor IE filter failed (%d)", (int)filterStatus);
+        printf("HaLow: beacon vendor IE filter failed (%d)\n", (int)filterStatus);
+    }
 
     LOG_INFO("HaLow: raw 802.11ah bearer enabled id='%s' country=%s wifi_key=open meshtastic_key=%s", meshId, countryCode,
              meshKey[0] ? "primary-psk" : "open");
@@ -527,12 +748,15 @@ int32_t HaLowInterface::runOnce()
                (unsigned long)staAssocReqCount, (unsigned long)staCtrlPortOpenCount);
     }
 
-    if (nodeInfoPingPending && nodeInfoModule &&
-        !Throttle::isWithinTimespanMs(lastNodeInfoPingMs, NODEINFO_PING_INTERVAL_MS)) {
+    bool nodeInfoIntervalReady = !Throttle::isWithinTimespanMs(lastNodeInfoPingMs, NODEINFO_PING_INTERVAL_MS);
+    if (meshEnabled && nodeInfoModule && nodeInfoIntervalReady) {
+        const char *reason = nodeInfoPingPending ? "beacon" : "periodic";
         nodeInfoPingPending = false;
         lastNodeInfoPingMs = millis();
-        LOG_INFO("HaLow: mesh beacon seen, sending NodeInfo ping");
-        printf("HaLow: mesh beacon seen, sending NodeInfo ping\n");
+        LOG_INFO("HaLow: sending NodeInfo discovery reason=%s", reason);
+        printf("HaLow: sending NodeInfo discovery reason=%s id='%s' best_bssid=%02x:%02x:%02x:%02x:%02x:%02x rssi=%d\n",
+               reason, bestMeshId, bestMeshBssid[0], bestMeshBssid[1], bestMeshBssid[2], bestMeshBssid[3],
+               bestMeshBssid[4], bestMeshBssid[5], bestMeshRssi);
         nodeInfoModule->sendOurNodeInfo(NODENUM_BROADCAST, true, 0, true);
     }
 #endif
@@ -565,6 +789,11 @@ bool HaLowInterface::startMeshInfoRequest()
     meshScanIes[0] = WLAN_IE_ID_MESH_ID;
     meshScanIes[1] = (uint8_t)meshIdLen;
     memcpy(&meshScanIes[2], meshId, meshIdLen);
+    size_t meshScanIesLen = 2 + meshIdLen;
+    if (discoveryVendorIeLen > 0 && meshScanIesLen + discoveryVendorIeLen <= sizeof(meshScanIes)) {
+        memcpy(meshScanIes + meshScanIesLen, discoveryVendorIe, discoveryVendorIeLen);
+        meshScanIesLen += discoveryVendorIeLen;
+    }
 
     meshScanReq.scan_rx_cb = scanRxTrampoline;
     meshScanReq.scan_complete_cb = scanCompleteTrampoline;
@@ -573,7 +802,7 @@ bool HaLowInterface::startMeshInfoRequest()
     memcpy(meshScanReq.args.ssid, meshId, meshIdLen);
     meshScanReq.args.ssid_len = meshIdLen;
     meshScanReq.args.extra_ies = meshScanIes;
-    meshScanReq.args.extra_ies_len = 2 + meshIdLen;
+    meshScanReq.args.extra_ies_len = meshScanIesLen;
 
     LOG_INFO("HaLow: starting mesh info request id='%s' dwell=%ums extra_ies=%u", meshId,
              (unsigned)HALOW_MESH_SCAN_DWELL_MS, (unsigned)meshScanReq.args.extra_ies_len);
@@ -673,6 +902,7 @@ void HaLowInterface::onMeshScanResult(const struct mmwlan_scan_result *result)
     size_t targetLen = strnlen(this->meshId, MMWLAN_SSID_MAXLEN);
     bool meshIdMatches = meshId && meshIdLen == targetLen && memcmp(meshId, this->meshId, targetLen) == 0;
     staScanResultCount++;
+    onDiscoveryVendorIes(result->ies, result->ies_len, result->rssi);
     LOG_INFO("HaLow: scan result bssid=%02x:%02x:%02x:%02x:%02x:%02x rssi=%d ies=%u mesh_id='%.*s' match=%u mesh_cfg=%u",
              result->bssid[0], result->bssid[1], result->bssid[2], result->bssid[3], result->bssid[4], result->bssid[5],
              result->rssi, (unsigned)result->ies_len, (int)meshIdLen, meshId ? (const char *)meshId : "",
@@ -721,6 +951,8 @@ void HaLowInterface::onMeshScanComplete(enum mmwlan_scan_state scan_state)
 void HaLowInterface::onFrameReceived(const uint8_t *payload, size_t payload_len, int8_t rssi)
 {
     if (!payload || payload_len < sizeof(PacketHeader)) {
+        LOG_WARN("HaLow: rx data too short len=%u", (unsigned)payload_len);
+        printf("HaLow: rx data too short len=%u\n", (unsigned)payload_len);
         return;
     }
     // Cap at our RadioBuffer size — anything larger is malformed for our wire
@@ -764,6 +996,11 @@ void HaLowInterface::onFrameReceived(const uint8_t *payload, size_t payload_len,
     p->rx_rssi = (link_rssi == INT32_MIN) ? 0 : (int8_t)link_rssi;
     p->rx_snr = 0;
     p->rx_time = getValidTime(RTCQualityFromNet);
+
+    LOG_INFO("HaLow: rx mesh packet from=0x%08x to=0x%08x id=0x%08x ch=%u payload=%u rssi=%d", p->from, p->to, p->id,
+             p->channel, (unsigned)p->encrypted.size, p->rx_rssi);
+    printf("HaLow: rx mesh packet from=0x%08x to=0x%08x id=0x%08x ch=%u payload=%u rssi=%d\n", p->from, p->to, p->id,
+           p->channel, (unsigned)p->encrypted.size, p->rx_rssi);
 
     deliverToReceiver(p);
 }

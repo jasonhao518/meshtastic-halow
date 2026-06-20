@@ -44,6 +44,18 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
     int32_t runOnce() override;
 
   private:
+    static constexpr uint8_t WLAN_IE_ID_MESH_CONFIG = 113;
+    static constexpr uint8_t WLAN_IE_ID_MESH_ID = 114;
+    static constexpr uint8_t WLAN_IE_ID_VENDOR_SPECIFIC = 221;
+    static constexpr uint8_t MESHTASTIC_VENDOR_OUI[3] = {'m', 's', 'h'};
+    static constexpr uint8_t MESHTASTIC_VENDOR_TYPE_NODEINFO = 1;
+    static constexpr uint8_t MESHTASTIC_VENDOR_VERSION = 1;
+    static constexpr size_t MAX_DISCOVERY_VENDOR_IES = 2;
+    static constexpr size_t MAX_VENDOR_IE_PAYLOAD_LEN = 255;
+    static constexpr size_t MAX_VENDOR_IE_TOTAL_LEN = 2 + MAX_VENDOR_IE_PAYLOAD_LEN;
+    static constexpr size_t MESHTASTIC_VENDOR_HEADER_LEN = 7;
+    static constexpr size_t MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN = MAX_VENDOR_IE_PAYLOAD_LEN - MESHTASTIC_VENDOR_HEADER_LEN;
+
     volatile bool linkUp = false;
     volatile bool scanInProgress = false;
     volatile bool meshPeerSeen = false;
@@ -65,11 +77,15 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
     int16_t bestMeshRssi = -32768;
     uint8_t bestMeshBssid[6] = {0};
     char bestMeshId[33] = {0};
+    uint8_t discoveryVendorIe[MAX_DISCOVERY_VENDOR_IES * MAX_VENDOR_IE_TOTAL_LEN] = {0};
+    size_t discoveryVendorIeLen = 0;
     char meshId[33] = {0};
     char meshKey[65] = {0};
     char countryCode[3] = {0};
 
     void onFrameReceived(const uint8_t *payload, size_t payload_len, int8_t rssi);
+    void onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int8_t rssi);
+    void buildDiscoveryVendorIe();
     bool startMeshInfoRequest();
     bool loadMeshProfile();
 
@@ -77,7 +93,8 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
     bool applyChannelList();
     bool startMeshStation();
 
-    uint8_t meshScanIes[2 + MMWLAN_SSID_MAXLEN] = {0};
+    struct mmwlan_beacon_vendor_ie_filter beaconVendorIeFilter = {};
+    uint8_t meshScanIes[2 + MMWLAN_SSID_MAXLEN + sizeof(discoveryVendorIe)] = {0};
     struct mmwlan_scan_req meshScanReq = MMWLAN_SCAN_REQ_INIT;
 
     void onMeshScanResult(const struct mmwlan_scan_result *result);
@@ -91,14 +108,13 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
     static void scanRxTrampoline(const struct mmwlan_scan_result *result, void *arg);
     static void scanCompleteTrampoline(enum mmwlan_scan_state scan_state, void *arg);
     static void staEventTrampoline(const struct mmwlan_sta_event_cb_args *sta_event, void *arg);
+    static void beaconVendorIeTrampoline(const uint8_t *ies, uint32_t ies_len, void *arg);
 #endif
 
     static constexpr uint32_t MESH_STATUS_LOG_INTERVAL_MS = 10000;
     static constexpr uint32_t NODEINFO_PING_INTERVAL_MS = 60000;
     static constexpr uint16_t MESH_CONNECT_SCAN_BASE_S = 60;
     static constexpr uint16_t MESH_CONNECT_SCAN_LIMIT_S = 600;
-    static constexpr uint8_t WLAN_IE_ID_MESH_CONFIG = 113;
-    static constexpr uint8_t WLAN_IE_ID_MESH_ID = 114;
     // Approximate bytes-per-millisecond at the configured channel width / MCS.
     // HaLow is 150 kbps to 32.5 Mbps depending on configuration — picking a
     // single value is fiction, but airtime accounting needs *something*, and
