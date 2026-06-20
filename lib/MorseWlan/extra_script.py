@@ -175,6 +175,12 @@ def _hostap_sources():
     ]
 
 
+def _strip_lto_flags(build_env):
+    for key in ("CCFLAGS", "CFLAGS", "CXXFLAGS", "ASFLAGS"):
+        flags = build_env.get(key, [])
+        build_env[key] = [flag for flag in flags if not str(flag).startswith("-flto")]
+
+
 if not os.path.isdir(SDK_DIR):
     raise RuntimeError("third_party/mm-iot-esp32 submodule is missing; run git submodule update --init --recursive")
 
@@ -211,6 +217,7 @@ shim_sources = [
     os.path.join(SDK_SHIMS, "mmhal_os.c"),
     os.path.join(SDK_SHIMS, "mmhal_wlan.c"),
     os.path.join(SDK_SHIMS, "mmhal_wlan_binaries.c"),
+    os.path.join(SDK_SHIMS, "crypto_mbedtls_mm.c"),
     os.path.join(SDK_SRC, "mmpktmem", "mmpktmem_heap.c"),
     os.path.join(SDK_SRC, "mmutils", "mmbuf.c"),
     os.path.join(SDK_SRC, "mmutils", "mmcrc.c"),
@@ -219,6 +226,8 @@ shim_sources = [
 ]
 
 build_env = env.Clone()
+if source_build_morse:
+    _strip_lto_flags(build_env)
 build_env.Prepend(CPPPATH=include_dirs)
 build_env.Append(
     CPPDEFINES=[
