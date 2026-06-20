@@ -64,7 +64,7 @@ def _run(cmd, **kwargs):
 
 def _toolchain_program(suffix):
     ar = env.subst("$AR")
-    prefix = re.sub(r"ar$", "", ar)
+    prefix = re.sub(r"(gcc-)?ar$", "", ar)
     return prefix + suffix
 
 
@@ -142,7 +142,6 @@ shim_sources = [
     os.path.join(SDK_SHIMS, "mmhal_os.c"),
     os.path.join(SDK_SHIMS, "mmhal_wlan.c"),
     os.path.join(SDK_SHIMS, "mmhal_wlan_binaries.c"),
-    os.path.join(SDK_SHIMS, "crypto_mbedtls_mm.c"),
     os.path.join(SDK_SRC, "mmpktmem", "mmpktmem_heap.c"),
     os.path.join(SDK_SRC, "mmutils", "mmbuf.c"),
     os.path.join(SDK_SRC, "mmutils", "mmcrc.c"),
@@ -156,7 +155,6 @@ build_env.Append(
     CPPDEFINES=[
         "CONFIG_IEEE80211AH",
         "MM_IOT",
-        ("CONFIG_MBEDTLS_SHA512_C", 1),
         ("CONFIG_MMHAL_CHIP_TYPE_MM6108", 1),
         ("CONFIG_MMHAL_CHIP_TYPE_MM8108", 0),
         ("CONFIG_MM_EXPERIMENTAL_MESH", 1),
@@ -173,8 +171,6 @@ build_env.Append(
         ("ON_DEMAND_TIMERS_ENABLED", 0),
     ],
     CCFLAGS=[
-        "-include",
-        "mm_mbedtls_config.h",
         "-Wno-c++-compat",
         "-Wno-unused-but-set-variable",
         "-Wno-unused-function",
