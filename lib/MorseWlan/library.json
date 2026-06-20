@@ -1,12 +1,12 @@
 {
   "name": "MorseWlan",
   "version": "0.1.0",
-  "description": "Morse Micro mm-iot-esp32 SDK vendored for Meshtastic HaLow transport. Static morselib (Apache-2.0) + open-source shims.",
+  "description": "PlatformIO wrapper for the third_party/mm-iot-esp32 Morse Micro SDK.",
   "frameworks": ["arduino", "espidf"],
   "platforms": ["espressif32"],
   "build": {
     "srcDir": "src",
-    "srcFilter": ["+<*.c>"],
+    "srcFilter": ["-<*>"],
     "includeDir": "include",
     "libArchive": false,
     "extraScript": "extra_script.py"

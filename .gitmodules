@@ -4,3 +4,7 @@
 [submodule "meshtestic"]
 	path = meshtestic
 	url = https://github.com/meshtastic/meshTestic
+[submodule "third_party/mm-iot-esp32"]
+	path = third_party/mm-iot-esp32
+	url = https://github.com/edgez-ai/mm-iot-esp32-mesh.git
+	branch = mesh_single

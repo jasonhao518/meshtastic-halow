@@ -3,6 +3,8 @@
 
 #include "RadioInterface.h"
 #include "concurrency/OSThread.h"
+#include <stddef.h>
+#include <stdint.h>
 
 #ifdef USE_MM_IOT_ESP32
 extern "C" {
@@ -19,8 +21,8 @@ extern "C" {
  * the same RadioBuffer the LoRa path builds via beginSending(), so the
  * Meshtastic wire format is unchanged.
  *
- * This mode associates with a HaLow AP, but does not initialize IP. The AP is
- * only the 802.11ah distribution system for raw Meshtastic frames.
+ * Mesh discovery uses standard 802.11 mesh advertisement IEs. The AP path is
+ * intentionally not used for this transport.
  */
 class HaLowInterface : public RadioInterface, private concurrency::OSThread
 {
@@ -42,16 +44,39 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
 
   private:
     volatile bool linkUp = false;
+    volatile bool scanInProgress = false;
+    volatile bool meshPeerSeen = false;
+    uint32_t lastScanMs = 0;
+    uint32_t lastMeshInfoMs = 0;
+    int16_t bestMeshRssi = -32768;
+    uint8_t bestMeshBssid[6] = {0};
+    char bestMeshId[33] = {0};
+    char meshId[33] = {0};
+    char meshKey[65] = {0};
+    char countryCode[3] = {0};
 
     void onFrameReceived(const uint8_t *payload, size_t payload_len, int8_t rssi);
+    void startMeshInfoRequest();
+    bool loadMeshProfile();
 
 #ifdef USE_MM_IOT_ESP32
+    uint8_t meshScanIes[2 + MMWLAN_SSID_MAXLEN] = {0};
+    struct mmwlan_scan_req meshScanReq = MMWLAN_SCAN_REQ_INIT;
+
+    void onMeshScanResult(const struct mmwlan_scan_result *result);
+    void onMeshScanComplete(enum mmwlan_scan_state scan_state);
+
     // Trampoline registered with mmwlan_register_rx_cb. The callback hands us
     // the 802.3 header and payload separately.
     static void rxTrampoline(uint8_t *header, unsigned header_len, uint8_t *payload, unsigned payload_len, void *arg);
     static void linkStateTrampoline(enum mmwlan_link_state link_state, void *arg);
+    static void scanRxTrampoline(const struct mmwlan_scan_result *result, void *arg);
+    static void scanCompleteTrampoline(enum mmwlan_scan_state scan_state, void *arg);
 #endif
 
+    static constexpr uint32_t MESH_INFO_SCAN_INTERVAL_MS = 30000;
+    static constexpr uint8_t WLAN_IE_ID_MESH_CONFIG = 113;
+    static constexpr uint8_t WLAN_IE_ID_MESH_ID = 114;
     // Approximate bytes-per-millisecond at the configured channel width / MCS.
     // HaLow is 150 kbps to 32.5 Mbps depending on configuration — picking a
     // single value is fiction, but airtime accounting needs *something*, and

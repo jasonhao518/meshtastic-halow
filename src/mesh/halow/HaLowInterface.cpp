@@ -3,30 +3,102 @@
 
 #include "HaLowFrame.h"
 #include "HaLowInterface.h"
+#include "Channels.h"
+#include "MeshRadio.h"
 #include "MeshTypes.h"
 #include "RTC.h" // getValidTime / RTCQualityFromNet
+#include "Throttle.h"
+#include "main.h"
+#include <algorithm>
 #include <string.h>
 
 #ifdef USE_MM_IOT_ESP32
 extern "C" {
 #include "mmpkt.h"
 #include "mmhal.h"
+#include "mmregdb.h"
 #include "mmwlan.h"
-#include "mmwlan_regdb.def"
 }
 
-#ifndef HALOW_COUNTRY_CODE
-#define HALOW_COUNTRY_CODE "US"
-#endif
-// SSID/PSK supplied at build time. Empty SSID means "don't auto-associate" —
-// the chip boots and idles, useful for testing without an AP nearby.
-#ifndef HALOW_SSID
-#define HALOW_SSID ""
-#endif
-#ifndef HALOW_PASSPHRASE
-#define HALOW_PASSPHRASE ""
+#ifndef HALOW_MESH_SCAN_DWELL_MS
+#define HALOW_MESH_SCAN_DWELL_MS 120
 #endif
 #endif
+
+static const char *regionToHaLowCountryCode(meshtastic_Config_LoRaConfig_RegionCode region)
+{
+    switch (region) {
+    case meshtastic_Config_LoRaConfig_RegionCode_US:
+        return "US";
+    case meshtastic_Config_LoRaConfig_RegionCode_EU_433:
+    case meshtastic_Config_LoRaConfig_RegionCode_EU_868:
+    case meshtastic_Config_LoRaConfig_RegionCode_EU_866:
+    case meshtastic_Config_LoRaConfig_RegionCode_EU_874:
+    case meshtastic_Config_LoRaConfig_RegionCode_EU_917:
+    case meshtastic_Config_LoRaConfig_RegionCode_EU_N_868:
+    case meshtastic_Config_LoRaConfig_RegionCode_UA_433:
+    case meshtastic_Config_LoRaConfig_RegionCode_UA_868:
+    case meshtastic_Config_LoRaConfig_RegionCode_KZ_433:
+    case meshtastic_Config_LoRaConfig_RegionCode_KZ_863:
+        return "EU";
+    case meshtastic_Config_LoRaConfig_RegionCode_ANZ:
+    case meshtastic_Config_LoRaConfig_RegionCode_ANZ_433:
+        return "AU";
+    case meshtastic_Config_LoRaConfig_RegionCode_NZ_865:
+        return "NZ";
+    case meshtastic_Config_LoRaConfig_RegionCode_IN:
+    case meshtastic_Config_LoRaConfig_RegionCode_NP_865:
+        return "IN";
+    case meshtastic_Config_LoRaConfig_RegionCode_JP:
+        return "JP";
+    case meshtastic_Config_LoRaConfig_RegionCode_KR:
+        return "KR";
+    case meshtastic_Config_LoRaConfig_RegionCode_SG_923:
+        return "SG";
+    default:
+        return nullptr;
+    }
+}
+
+static size_t expandPrimaryPsk(uint8_t *out, size_t outLen)
+{
+    const auto &primary = channels.getPrimary();
+    if (primary.psk.size == 0) {
+        return 0;
+    }
+
+    size_t pskLen = std::min((size_t)primary.psk.size, outLen);
+    memcpy(out, primary.psk.bytes, pskLen);
+    if (pskLen == 1) {
+        uint8_t pskIndex = out[0];
+        if (pskIndex == 0) {
+            return 0;
+        }
+        memcpy(out, defaultpsk, sizeof(defaultpsk));
+        out[sizeof(defaultpsk) - 1] = (uint8_t)(out[sizeof(defaultpsk) - 1] + pskIndex - 1);
+        return sizeof(defaultpsk);
+    }
+    if (pskLen < 16) {
+        memset(out + pskLen, 0, 16 - pskLen);
+        return 16;
+    }
+    if (pskLen != 16 && pskLen < 32) {
+        memset(out + pskLen, 0, 32 - pskLen);
+        return 32;
+    }
+    return pskLen;
+}
+
+static void bytesToHex(const uint8_t *bytes, size_t len, char *out, size_t outLen)
+{
+    static constexpr char hex[] = "0123456789abcdef";
+    size_t pos = 0;
+    for (size_t i = 0; i < len && pos + 2 < outLen; i++) {
+        out[pos++] = hex[bytes[i] >> 4];
+        out[pos++] = hex[bytes[i] & 0x0f];
+    }
+    out[pos] = '\0';
+}
 
 HaLowInterface::HaLowInterface() : concurrency::OSThread("HaLow") {}
 
@@ -63,6 +135,22 @@ void HaLowInterface::rxTrampoline(uint8_t *header, unsigned header_len, uint8_t 
     }
     self->onFrameReceived(payload, payload_len, /*rssi*/ 0);
 }
+
+void HaLowInterface::scanRxTrampoline(const struct mmwlan_scan_result *result, void *arg)
+{
+    HaLowInterface *self = static_cast<HaLowInterface *>(arg);
+    if (self) {
+        self->onMeshScanResult(result);
+    }
+}
+
+void HaLowInterface::scanCompleteTrampoline(enum mmwlan_scan_state scan_state, void *arg)
+{
+    HaLowInterface *self = static_cast<HaLowInterface *>(arg);
+    if (self) {
+        self->onMeshScanComplete(scan_state);
+    }
+}
 #endif
 
 HaLowInterface::~HaLowInterface() = default;
@@ -72,15 +160,19 @@ bool HaLowInterface::init()
     RadioInterface::init();
 
 #ifdef USE_MM_IOT_ESP32
+    if (!loadMeshProfile()) {
+        return false;
+    }
+
     LOG_INFO("HaLow: mmhal_init()");
     mmhal_init();
 
     LOG_INFO("HaLow: mmwlan_init()");
     mmwlan_init();
 
-    const struct mmwlan_s1g_channel_list *channel_list = mmwlan_lookup_regulatory_domain(get_regulatory_db(), HALOW_COUNTRY_CODE);
+    const struct mmwlan_s1g_channel_list *channel_list = mmwlan_lookup_regulatory_domain(get_regulatory_db(), countryCode);
     if (!channel_list) {
-        LOG_ERROR("HaLow: country %s not in regdb", HALOW_COUNTRY_CODE);
+        LOG_ERROR("HaLow: country %s not in regdb", countryCode);
         return false;
     }
     if (mmwlan_set_channel_list(channel_list) != MMWLAN_SUCCESS) {
@@ -101,32 +193,40 @@ bool HaLowInterface::init()
                  version.morselib_version);
     }
 
-    if (HALOW_SSID[0] == '\0') {
-        LOG_INFO("HaLow: no SSID configured, chip will idle (set -DHALOW_SSID=...)");
-        return false;
-    }
-
-    struct mmwlan_sta_args sta_args = MMWLAN_STA_ARGS_INIT;
-    sta_args.ssid_len = strnlen(HALOW_SSID, sizeof(sta_args.ssid));
-    memcpy(sta_args.ssid, HALOW_SSID, sta_args.ssid_len);
-    sta_args.passphrase_len = strnlen(HALOW_PASSPHRASE, sizeof(sta_args.passphrase));
-    memcpy(sta_args.passphrase, HALOW_PASSPHRASE, sta_args.passphrase_len);
-    sta_args.security_type = (sta_args.passphrase_len > 0) ? MMWLAN_SAE : MMWLAN_OPEN;
-
     mmwlan_register_link_state_cb(linkStateTrampoline, this);
     if (mmwlan_register_rx_cb(rxTrampoline, this) != MMWLAN_SUCCESS) {
         LOG_ERROR("HaLow: register_rx_cb failed");
         return false;
     }
 
-    LOG_INFO("HaLow: associating with SSID '%s'", HALOW_SSID);
-    if (mmwlan_sta_enable(&sta_args, NULL) != MMWLAN_SUCCESS) {
-        LOG_ERROR("HaLow: mmwlan_sta_enable failed");
+    struct mmwlan_scan_config scanConfig = MMWLAN_SCAN_CONFIG_INIT;
+    scanConfig.dwell_time_ms = HALOW_MESH_SCAN_DWELL_MS;
+    scanConfig.home_channel_dwell_time_ms = 0;
+    if (mmwlan_set_scan_config(&scanConfig) != MMWLAN_SUCCESS) {
+        LOG_WARN("HaLow: set mesh scan config failed");
+    }
+
+    struct mmwlan_sta_args staArgs = MMWLAN_STA_ARGS_INIT;
+    staArgs.ssid_len = strnlen(meshId, sizeof(staArgs.ssid));
+    memcpy(staArgs.ssid, meshId, staArgs.ssid_len);
+    staArgs.passphrase_len = strnlen(meshKey, sizeof(meshKey));
+    memcpy(staArgs.passphrase, meshKey, staArgs.passphrase_len);
+    staArgs.security_type = staArgs.passphrase_len > 0 ? MMWLAN_SAE : MMWLAN_OPEN;
+    staArgs.scan_rx_cb = scanRxTrampoline;
+    staArgs.scan_rx_cb_arg = this;
+    staArgs.scan_interval_base_s = 1;
+    staArgs.scan_interval_limit_s = 8;
+    staArgs.mesh_mode = true;
+
+    enum mmwlan_status meshStatus = mmwlan_sta_enable(&staArgs, NULL);
+    if (meshStatus != MMWLAN_SUCCESS) {
+        LOG_ERROR("HaLow: mesh STA enable failed (%d)", (int)meshStatus);
         return false;
     }
 
-    // From here on out, HaLow is the radio. The AP relays raw 802.3 frames to
-    // associated STAs; IP is intentionally not initialized.
+    LOG_INFO("HaLow: 802.11s mesh enabled id='%s' country=%s key=%s", meshId, countryCode,
+             staArgs.passphrase_len > 0 ? "primary-psk" : "open");
+    startMeshInfoRequest();
     return true;
 #else
     LOG_WARN("HaLow: built without USE_MM_IOT_ESP32, transport is a stub");
@@ -146,6 +246,36 @@ bool HaLowInterface::sleep()
 
 bool HaLowInterface::canSleep()
 {
+    return true;
+}
+
+bool HaLowInterface::loadMeshProfile()
+{
+    const char *country = regionToHaLowCountryCode(config.lora.region);
+    if (!country) {
+        LOG_ERROR("HaLow: Meshtastic region %d has no Morse S1G country mapping", (int)config.lora.region);
+        return false;
+    }
+    strncpy(countryCode, country, sizeof(countryCode));
+    countryCode[sizeof(countryCode) - 1] = '\0';
+
+    const char *primaryName = channels.getName(channels.getPrimaryIndex());
+    if (!primaryName || primaryName[0] == '\0') {
+        primaryName = "LongFast";
+    }
+    strncpy(meshId, primaryName, sizeof(meshId));
+    meshId[sizeof(meshId) - 1] = '\0';
+
+    uint8_t psk[32] = {0};
+    size_t pskLen = expandPrimaryPsk(psk, sizeof(psk));
+    if (pskLen == 0) {
+        meshKey[0] = '\0';
+    } else {
+        bytesToHex(psk, pskLen, meshKey, sizeof(meshKey));
+    }
+
+    LOG_INFO("HaLow: profile from Meshtastic country=%s mesh_id='%s' key=%s", countryCode, meshId,
+             meshKey[0] ? "primary-channel" : "open");
     return true;
 }
 
@@ -226,8 +356,107 @@ uint32_t HaLowInterface::getPacketTime(uint32_t totalPacketLen, bool /*received*
 
 int32_t HaLowInterface::runOnce()
 {
-    return 1000; // nothing to do until the SDK is wired in
+#ifdef USE_MM_IOT_ESP32
+    if (!scanInProgress && !Throttle::isWithinTimespanMs(lastScanMs, MESH_INFO_SCAN_INTERVAL_MS)) {
+        startMeshInfoRequest();
+    }
+#endif
+    return 1000;
 }
+
+void HaLowInterface::startMeshInfoRequest()
+{
+#ifdef USE_MM_IOT_ESP32
+    if (scanInProgress) {
+        return;
+    }
+
+    size_t meshIdLen = strnlen(meshId, MMWLAN_SSID_MAXLEN);
+    if (meshIdLen == 0) {
+        return;
+    }
+
+    meshScanReq = MMWLAN_SCAN_REQ_INIT;
+    meshScanIes[0] = WLAN_IE_ID_MESH_ID;
+    meshScanIes[1] = (uint8_t)meshIdLen;
+    memcpy(&meshScanIes[2], meshId, meshIdLen);
+
+    meshScanReq.scan_rx_cb = scanRxTrampoline;
+    meshScanReq.scan_complete_cb = scanCompleteTrampoline;
+    meshScanReq.scan_cb_arg = this;
+    meshScanReq.args.dwell_time_ms = HALOW_MESH_SCAN_DWELL_MS;
+    memcpy(meshScanReq.args.ssid, meshId, meshIdLen);
+    meshScanReq.args.ssid_len = meshIdLen;
+    meshScanReq.args.extra_ies = meshScanIes;
+    meshScanReq.args.extra_ies_len = 2 + meshIdLen;
+
+    enum mmwlan_status st = mmwlan_scan_request(&meshScanReq);
+    lastScanMs = millis();
+    if (st == MMWLAN_SUCCESS) {
+        scanInProgress = true;
+        LOG_INFO("HaLow: requested mesh info id='%s'", meshId);
+    } else {
+        LOG_WARN("HaLow: mesh info request failed (%d)", (int)st);
+    }
+#endif
+}
+
+#ifdef USE_MM_IOT_ESP32
+void HaLowInterface::onMeshScanResult(const struct mmwlan_scan_result *result)
+{
+    if (!result || !result->bssid || !result->ies) {
+        return;
+    }
+
+    const uint8_t *meshId = nullptr;
+    uint8_t meshIdLen = 0;
+    bool hasMeshConfig = false;
+    size_t off = 0;
+    while (off + 2 <= result->ies_len) {
+        uint8_t eid = result->ies[off];
+        uint8_t len = result->ies[off + 1];
+        size_t next = off + 2 + len;
+        if (next > result->ies_len) {
+            break;
+        }
+        if (eid == WLAN_IE_ID_MESH_ID) {
+            meshId = &result->ies[off + 2];
+            meshIdLen = len;
+        } else if (eid == WLAN_IE_ID_MESH_CONFIG) {
+            hasMeshConfig = true;
+        }
+        off = next;
+    }
+
+    size_t targetLen = strnlen(this->meshId, MMWLAN_SSID_MAXLEN);
+    bool meshIdMatches = meshId && meshIdLen == targetLen && memcmp(meshId, this->meshId, targetLen) == 0;
+    if (!meshIdMatches && !hasMeshConfig) {
+        return;
+    }
+
+    meshPeerSeen = true;
+    lastMeshInfoMs = millis();
+    if (result->rssi > bestMeshRssi) {
+        bestMeshRssi = result->rssi;
+        memcpy(bestMeshBssid, result->bssid, sizeof(bestMeshBssid));
+        size_t copyLen = meshIdLen < sizeof(bestMeshId) - 1 ? meshIdLen : sizeof(bestMeshId) - 1;
+        if (meshId && copyLen > 0) {
+            memcpy(bestMeshId, meshId, copyLen);
+        }
+        bestMeshId[copyLen] = '\0';
+    }
+
+    LOG_INFO("HaLow: mesh info id='%.*s' bssid=%02x:%02x:%02x:%02x:%02x:%02x rssi=%d mesh_cfg=%u",
+             (int)meshIdLen, meshId ? (const char *)meshId : "", result->bssid[0], result->bssid[1], result->bssid[2],
+             result->bssid[3], result->bssid[4], result->bssid[5], result->rssi, hasMeshConfig ? 1 : 0);
+}
+
+void HaLowInterface::onMeshScanComplete(enum mmwlan_scan_state scan_state)
+{
+    scanInProgress = false;
+    LOG_INFO("HaLow: mesh info request complete state=%d seen=%u", (int)scan_state, meshPeerSeen ? 1 : 0);
+}
+#endif
 
 void HaLowInterface::onFrameReceived(const uint8_t *payload, size_t payload_len, int8_t rssi)
 {
