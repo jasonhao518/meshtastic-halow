@@ -257,7 +257,6 @@ build_env.Append(
         "CONFIG_SAE",
         "CONFIG_SHA256",
         "CONFIG_SHA384",
-        "CONFIG_SHA512",
         "CONFIG_SME",
         "CONFIG_WNM",
         "IEEE8021X_EAPOL",
