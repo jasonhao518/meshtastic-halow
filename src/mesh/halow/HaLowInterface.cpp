@@ -9,6 +9,7 @@
 #include "RTC.h" // getValidTime / RTCQualityFromNet
 #include "Throttle.h"
 #include "main.h"
+#include "modules/NodeInfoModule.h"
 #include <algorithm>
 #include <stdio.h>
 #include <stdint.h>
@@ -246,6 +247,7 @@ bool HaLowInterface::reconfigure()
         meshEnabled = false;
         linkUp = false;
         scanInProgress = false;
+        nodeInfoPingPending = false;
     }
 
     if (!loadMeshProfile() || !applyChannelList()) {
@@ -266,6 +268,7 @@ bool HaLowInterface::sleep()
         meshEnabled = false;
         linkUp = false;
         scanInProgress = false;
+        nodeInfoPingPending = false;
     }
 #endif
     return true;
@@ -354,6 +357,7 @@ bool HaLowInterface::startMeshStation()
 
     meshEnabled = true;
     meshPeerSeen = false;
+    nodeInfoPingPending = false;
     bestMeshRssi = -32768;
     bestMeshId[0] = '\0';
 
@@ -402,9 +406,10 @@ ErrorCode HaLowInterface::send(meshtastic_MeshPacket *p)
     txbuf[13] = (uint8_t)(ETHERTYPE_MESHTASTIC_HALOW & 0xFF);
     memcpy(txbuf + sizeof(HaLowEthFrameHeader), &radioBuffer, encoded);
 
-    enum mmwlan_status st = mmwlan_tx_wait_until_ready(0);
+    enum mmwlan_status st = mmwlan_tx_wait_until_ready(MMWLAN_TX_DEFAULT_TIMEOUT_MS);
     if (st == MMWLAN_SUCCESS) {
         struct mmwlan_tx_metadata metadata = MMWLAN_TX_METADATA_INIT;
+        metadata.vif = MMWLAN_VIF_STA;
         struct mmpkt *pkt = mmwlan_alloc_mmpkt_for_tx(sizeof(HaLowEthFrameHeader) + encoded, metadata.tid);
         if (pkt) {
             struct mmpktview *pktview = mmpkt_open(pkt);
@@ -414,6 +419,12 @@ ErrorCode HaLowInterface::send(meshtastic_MeshPacket *p)
         } else {
             st = MMWLAN_NO_MEM;
         }
+    }
+    if (st == MMWLAN_SUCCESS) {
+        LOG_DEBUG("HaLow: tx queued id=0x%08x len=%u", p->id, (unsigned)(sizeof(HaLowEthFrameHeader) + encoded));
+    } else {
+        LOG_WARN("HaLow: tx failed id=0x%08x status=%d", p->id, (int)st);
+        printf("HaLow: tx failed id=0x%08x status=%d\n", p->id, (int)st);
     }
 
     packetPool.release(p);
@@ -444,6 +455,25 @@ uint32_t HaLowInterface::getPacketTime(uint32_t totalPacketLen, bool /*received*
 int32_t HaLowInterface::runOnce()
 {
 #ifdef USE_MM_IOT_ESP32
+    if (!Throttle::isWithinTimespanMs(lastScanStatusLogMs, SCAN_STATUS_LOG_INTERVAL_MS)) {
+        lastScanStatusLogMs = millis();
+        LOG_INFO("HaLow: scan status mesh=%u in_progress=%u peer_seen=%u last_scan_age=%lu last_info_age=%lu",
+                 meshEnabled ? 1 : 0, scanInProgress ? 1 : 0, meshPeerSeen ? 1 : 0,
+                 (unsigned long)(millis() - lastScanMs), (unsigned long)(millis() - lastMeshInfoMs));
+        printf("HaLow: scan status mesh=%u in_progress=%u peer_seen=%u last_scan_age=%lums last_info_age=%lums\n",
+               meshEnabled ? 1 : 0, scanInProgress ? 1 : 0, meshPeerSeen ? 1 : 0,
+               (unsigned long)(millis() - lastScanMs), (unsigned long)(millis() - lastMeshInfoMs));
+    }
+
+    if (nodeInfoPingPending && nodeInfoModule &&
+        !Throttle::isWithinTimespanMs(lastNodeInfoPingMs, NODEINFO_PING_INTERVAL_MS)) {
+        nodeInfoPingPending = false;
+        lastNodeInfoPingMs = millis();
+        LOG_INFO("HaLow: mesh beacon seen, sending NodeInfo ping");
+        printf("HaLow: mesh beacon seen, sending NodeInfo ping\n");
+        nodeInfoModule->sendOurNodeInfo(NODENUM_BROADCAST, true, 0, true);
+    }
+
     if (meshEnabled && !scanInProgress && !Throttle::isWithinTimespanMs(lastScanMs, MESH_INFO_SCAN_INTERVAL_MS)) {
         startMeshInfoRequest();
     }
@@ -455,11 +485,15 @@ void HaLowInterface::startMeshInfoRequest()
 {
 #ifdef USE_MM_IOT_ESP32
     if (scanInProgress) {
+        LOG_INFO("HaLow: mesh info request skipped, scan already in progress");
+        printf("HaLow: mesh info request skipped, scan already in progress\n");
         return;
     }
 
     size_t meshIdLen = strnlen(meshId, MMWLAN_SSID_MAXLEN);
     if (meshIdLen == 0) {
+        LOG_WARN("HaLow: mesh info request skipped, empty mesh id");
+        printf("HaLow: mesh info request skipped, empty mesh id\n");
         return;
     }
 
@@ -477,13 +511,20 @@ void HaLowInterface::startMeshInfoRequest()
     meshScanReq.args.extra_ies = meshScanIes;
     meshScanReq.args.extra_ies_len = 2 + meshIdLen;
 
+    LOG_INFO("HaLow: starting mesh info request id='%s' dwell=%ums extra_ies=%u", meshId,
+             (unsigned)HALOW_MESH_SCAN_DWELL_MS, (unsigned)meshScanReq.args.extra_ies_len);
+    printf("HaLow: starting mesh info request id='%s' dwell=%ums extra_ies=%u\n", meshId,
+           (unsigned)HALOW_MESH_SCAN_DWELL_MS, (unsigned)meshScanReq.args.extra_ies_len);
+
     enum mmwlan_status st = mmwlan_scan_request(&meshScanReq);
     lastScanMs = millis();
     if (st == MMWLAN_SUCCESS) {
         scanInProgress = true;
         LOG_INFO("HaLow: requested mesh info id='%s'", meshId);
+        printf("HaLow: requested mesh info id='%s'\n", meshId);
     } else {
         LOG_WARN("HaLow: mesh info request failed (%d)", (int)st);
+        printf("HaLow: mesh info request failed (%d)\n", (int)st);
     }
 #endif
 }
@@ -492,6 +533,8 @@ void HaLowInterface::startMeshInfoRequest()
 void HaLowInterface::onMeshScanResult(const struct mmwlan_scan_result *result)
 {
     if (!result || !result->bssid || !result->ies) {
+        LOG_WARN("HaLow: scan result missing fields result=%p", result);
+        printf("HaLow: scan result missing fields\n");
         return;
     }
 
@@ -517,11 +560,20 @@ void HaLowInterface::onMeshScanResult(const struct mmwlan_scan_result *result)
 
     size_t targetLen = strnlen(this->meshId, MMWLAN_SSID_MAXLEN);
     bool meshIdMatches = meshId && meshIdLen == targetLen && memcmp(meshId, this->meshId, targetLen) == 0;
+    LOG_INFO("HaLow: scan result bssid=%02x:%02x:%02x:%02x:%02x:%02x rssi=%d ies=%u mesh_id='%.*s' match=%u mesh_cfg=%u",
+             result->bssid[0], result->bssid[1], result->bssid[2], result->bssid[3], result->bssid[4], result->bssid[5],
+             result->rssi, (unsigned)result->ies_len, (int)meshIdLen, meshId ? (const char *)meshId : "",
+             meshIdMatches ? 1 : 0, hasMeshConfig ? 1 : 0);
+    printf("HaLow: scan result bssid=%02x:%02x:%02x:%02x:%02x:%02x rssi=%d ies=%u mesh_id='%.*s' match=%u mesh_cfg=%u\n",
+           result->bssid[0], result->bssid[1], result->bssid[2], result->bssid[3], result->bssid[4], result->bssid[5],
+           result->rssi, (unsigned)result->ies_len, (int)meshIdLen, meshId ? (const char *)meshId : "", meshIdMatches ? 1 : 0,
+           hasMeshConfig ? 1 : 0);
     if (!meshIdMatches && !hasMeshConfig) {
         return;
     }
 
     meshPeerSeen = true;
+    nodeInfoPingPending = true;
     lastMeshInfoMs = millis();
     if (result->rssi > bestMeshRssi) {
         bestMeshRssi = result->rssi;
@@ -542,6 +594,7 @@ void HaLowInterface::onMeshScanComplete(enum mmwlan_scan_state scan_state)
 {
     scanInProgress = false;
     LOG_INFO("HaLow: mesh info request complete state=%d seen=%u", (int)scan_state, meshPeerSeen ? 1 : 0);
+    printf("HaLow: mesh info request complete state=%d seen=%u\n", (int)scan_state, meshPeerSeen ? 1 : 0);
 }
 #endif
 

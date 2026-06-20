@@ -46,10 +46,13 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
     volatile bool linkUp = false;
     volatile bool scanInProgress = false;
     volatile bool meshPeerSeen = false;
+    volatile bool nodeInfoPingPending = false;
     bool wlanReady = false;
     bool meshEnabled = false;
     uint32_t lastScanMs = 0;
     uint32_t lastMeshInfoMs = 0;
+    uint32_t lastNodeInfoPingMs = 0;
+    uint32_t lastScanStatusLogMs = 0;
     int16_t bestMeshRssi = -32768;
     uint8_t bestMeshBssid[6] = {0};
     char bestMeshId[33] = {0};
@@ -80,6 +83,8 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
 #endif
 
     static constexpr uint32_t MESH_INFO_SCAN_INTERVAL_MS = 30000;
+    static constexpr uint32_t SCAN_STATUS_LOG_INTERVAL_MS = 10000;
+    static constexpr uint32_t NODEINFO_PING_INTERVAL_MS = 60000;
     static constexpr uint8_t WLAN_IE_ID_MESH_CONFIG = 113;
     static constexpr uint8_t WLAN_IE_ID_MESH_ID = 114;
     // Approximate bytes-per-millisecond at the configured channel width / MCS.
