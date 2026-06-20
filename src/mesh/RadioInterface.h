@@ -174,6 +174,9 @@ class RadioInterface
     /** Attempt to find a packet in the TxQueue. Returns true if the packet was found. */
     virtual bool findInTxQueue(NodeNum from, PacketId id) { return false; }
 
+    /** Optional radio-specific local mesh discovery hook. */
+    virtual bool requestLocalMeshScan() { return false; }
+
     // methods from radiohead
 
     /// Initialise the Driver transport hardware and software.

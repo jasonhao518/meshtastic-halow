@@ -55,6 +55,9 @@ class Router : protected concurrency::OSThread, protected PacketHistory
     /** Attempt to find a packet in the TxQueue. Returns true if the packet was found. */
     bool findInTxQueue(NodeNum from, PacketId id);
 
+    /** Ask the current radio to run its local mesh discovery hook, if it has one. */
+    bool requestLocalMeshScan() { return iface ? iface->requestLocalMeshScan() : false; }
+
     /** Allocate and return a meshpacket which defaults as send to broadcast from the current node.
      * The returned packet is guaranteed to have a unique packet ID already assigned
      */

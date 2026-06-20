@@ -105,6 +105,32 @@ static void bytesToHex(const uint8_t *bytes, size_t len, char *out, size_t outLe
     out[pos] = '\0';
 }
 
+#ifdef USE_MM_IOT_ESP32
+static const char *staEventToStr(enum mmwlan_sta_event evt)
+{
+    switch (evt) {
+    case MMWLAN_STA_EVT_SCAN_REQUEST:
+        return "SCAN_REQUEST";
+    case MMWLAN_STA_EVT_SCAN_COMPLETE:
+        return "SCAN_COMPLETE";
+    case MMWLAN_STA_EVT_SCAN_ABORT:
+        return "SCAN_ABORT";
+    case MMWLAN_STA_EVT_AUTH_REQUEST:
+        return "AUTH_REQUEST";
+    case MMWLAN_STA_EVT_ASSOC_REQUEST:
+        return "ASSOC_REQUEST";
+    case MMWLAN_STA_EVT_DEAUTH_TX:
+        return "DEAUTH_TX";
+    case MMWLAN_STA_EVT_CTRL_PORT_OPEN:
+        return "CTRL_PORT_OPEN";
+    case MMWLAN_STA_EVT_CTRL_PORT_CLOSED:
+        return "CTRL_PORT_CLOSED";
+    default:
+        return "UNKNOWN";
+    }
+}
+#endif
+
 HaLowInterface::HaLowInterface() : concurrency::OSThread("HaLow") {}
 
 #ifdef USE_MM_IOT_ESP32
@@ -154,6 +180,14 @@ void HaLowInterface::scanCompleteTrampoline(enum mmwlan_scan_state scan_state, v
     HaLowInterface *self = static_cast<HaLowInterface *>(arg);
     if (self) {
         self->onMeshScanComplete(scan_state);
+    }
+}
+
+void HaLowInterface::staEventTrampoline(const struct mmwlan_sta_event_cb_args *sta_event, void *arg)
+{
+    HaLowInterface *self = static_cast<HaLowInterface *>(arg);
+    if (self) {
+        self->onStaEvent(sta_event);
     }
 }
 #endif
@@ -344,6 +378,8 @@ bool HaLowInterface::startMeshStation()
     staArgs.security_type = staArgs.passphrase_len > 0 ? MMWLAN_SAE : MMWLAN_OPEN;
     staArgs.scan_rx_cb = scanRxTrampoline;
     staArgs.scan_rx_cb_arg = this;
+    staArgs.sta_evt_cb = staEventTrampoline;
+    staArgs.sta_evt_cb_arg = this;
     staArgs.scan_interval_base_s = 1;
     staArgs.scan_interval_limit_s = 8;
     staArgs.mesh_mode = true;
@@ -358,6 +394,14 @@ bool HaLowInterface::startMeshStation()
     meshEnabled = true;
     meshPeerSeen = false;
     nodeInfoPingPending = false;
+    staEventCount = 0;
+    staScanCount = 0;
+    staScanResultCount = 0;
+    staMeshAdvSeenCount = 0;
+    staTargetIdHitCount = 0;
+    staAuthReqCount = 0;
+    staAssocReqCount = 0;
+    staCtrlPortOpenCount = 0;
     bestMeshRssi = -32768;
     bestMeshId[0] = '\0';
 
@@ -365,7 +409,7 @@ bool HaLowInterface::startMeshStation()
              staArgs.passphrase_len > 0 ? "primary-psk" : "open");
     printf("HaLow: 802.11s mesh enabled id='%s' country=%s key=%s\n", meshId, countryCode,
            staArgs.passphrase_len > 0 ? "primary-psk" : "open");
-    startMeshInfoRequest();
+    printf("HaLow: MESH_ADVERTISER enabled, waiting for beacon/probe-response callbacks\n");
     return true;
 }
 #endif
@@ -452,17 +496,32 @@ uint32_t HaLowInterface::getPacketTime(uint32_t totalPacketLen, bool /*received*
     return ms ? ms : 1u;
 }
 
+bool HaLowInterface::requestLocalMeshScan()
+{
+#ifdef USE_MM_IOT_ESP32
+    LOG_INFO("HaLow: local mesh scan requested by client");
+    printf("HaLow: local mesh scan requested by client\n");
+    return startMeshInfoRequest();
+#else
+    return false;
+#endif
+}
+
 int32_t HaLowInterface::runOnce()
 {
 #ifdef USE_MM_IOT_ESP32
-    if (!Throttle::isWithinTimespanMs(lastScanStatusLogMs, SCAN_STATUS_LOG_INTERVAL_MS)) {
-        lastScanStatusLogMs = millis();
-        LOG_INFO("HaLow: scan status mesh=%u in_progress=%u peer_seen=%u last_scan_age=%lu last_info_age=%lu",
+    if (!Throttle::isWithinTimespanMs(lastMeshStatusLogMs, MESH_STATUS_LOG_INTERVAL_MS)) {
+        lastMeshStatusLogMs = millis();
+        LOG_INFO("HaLow: mesh status beaconing=%u scan_in_progress=%u peer_seen=%u last_scan_age=%lu last_info_age=%lu",
                  meshEnabled ? 1 : 0, scanInProgress ? 1 : 0, meshPeerSeen ? 1 : 0,
                  (unsigned long)(millis() - lastScanMs), (unsigned long)(millis() - lastMeshInfoMs));
-        printf("HaLow: scan status mesh=%u in_progress=%u peer_seen=%u last_scan_age=%lums last_info_age=%lums\n",
+        printf("HaLow: mesh status beaconing=%u scan_in_progress=%u peer_seen=%u last_scan_age=%lums last_info_age=%lums "
+               "sta_events=%lu sta_scans=%lu scan_results=%lu mesh_adv=%lu target_hits=%lu auth=%lu assoc=%lu ctrl_open=%lu\n",
                meshEnabled ? 1 : 0, scanInProgress ? 1 : 0, meshPeerSeen ? 1 : 0,
-               (unsigned long)(millis() - lastScanMs), (unsigned long)(millis() - lastMeshInfoMs));
+               (unsigned long)(millis() - lastScanMs), (unsigned long)(millis() - lastMeshInfoMs),
+               (unsigned long)staEventCount, (unsigned long)staScanCount, (unsigned long)staScanResultCount,
+               (unsigned long)staMeshAdvSeenCount, (unsigned long)staTargetIdHitCount, (unsigned long)staAuthReqCount,
+               (unsigned long)staAssocReqCount, (unsigned long)staCtrlPortOpenCount);
     }
 
     if (nodeInfoPingPending && nodeInfoModule &&
@@ -473,28 +532,30 @@ int32_t HaLowInterface::runOnce()
         printf("HaLow: mesh beacon seen, sending NodeInfo ping\n");
         nodeInfoModule->sendOurNodeInfo(NODENUM_BROADCAST, true, 0, true);
     }
-
-    if (meshEnabled && !scanInProgress && !Throttle::isWithinTimespanMs(lastScanMs, MESH_INFO_SCAN_INTERVAL_MS)) {
-        startMeshInfoRequest();
-    }
 #endif
     return 1000;
 }
 
-void HaLowInterface::startMeshInfoRequest()
+bool HaLowInterface::startMeshInfoRequest()
 {
 #ifdef USE_MM_IOT_ESP32
+    if (!meshEnabled) {
+        LOG_WARN("HaLow: mesh info request skipped, mesh not enabled");
+        printf("HaLow: mesh info request skipped, mesh not enabled\n");
+        return false;
+    }
+
     if (scanInProgress) {
         LOG_INFO("HaLow: mesh info request skipped, scan already in progress");
         printf("HaLow: mesh info request skipped, scan already in progress\n");
-        return;
+        return false;
     }
 
     size_t meshIdLen = strnlen(meshId, MMWLAN_SSID_MAXLEN);
     if (meshIdLen == 0) {
         LOG_WARN("HaLow: mesh info request skipped, empty mesh id");
         printf("HaLow: mesh info request skipped, empty mesh id\n");
-        return;
+        return false;
     }
 
     meshScanReq = MMWLAN_SCAN_REQ_INIT;
@@ -522,14 +583,62 @@ void HaLowInterface::startMeshInfoRequest()
         scanInProgress = true;
         LOG_INFO("HaLow: requested mesh info id='%s'", meshId);
         printf("HaLow: requested mesh info id='%s'\n", meshId);
+        return true;
     } else {
         LOG_WARN("HaLow: mesh info request failed (%d)", (int)st);
         printf("HaLow: mesh info request failed (%d)\n", (int)st);
+        return false;
     }
+#else
+    return false;
 #endif
 }
 
 #ifdef USE_MM_IOT_ESP32
+void HaLowInterface::onStaEvent(const struct mmwlan_sta_event_cb_args *sta_event)
+{
+    if (!sta_event) {
+        LOG_WARN("HaLow: STA_EVT missing payload");
+        printf("HaLow: STA_EVT missing payload\n");
+        return;
+    }
+
+    staEventCount++;
+    switch (sta_event->event) {
+    case MMWLAN_STA_EVT_SCAN_REQUEST:
+        staScanCount++;
+        break;
+    case MMWLAN_STA_EVT_SCAN_COMPLETE:
+        LOG_INFO("HaLow: STA scan summary req=%lu results=%lu target_hits=%lu mesh_adv=%lu",
+                 (unsigned long)staScanCount, (unsigned long)staScanResultCount, (unsigned long)staTargetIdHitCount,
+                 (unsigned long)staMeshAdvSeenCount);
+        printf("HaLow: STA scan summary req=%lu results=%lu target_hits=%lu mesh_adv=%lu\n",
+               (unsigned long)staScanCount, (unsigned long)staScanResultCount, (unsigned long)staTargetIdHitCount,
+               (unsigned long)staMeshAdvSeenCount);
+        break;
+    case MMWLAN_STA_EVT_SCAN_ABORT:
+        break;
+    case MMWLAN_STA_EVT_AUTH_REQUEST:
+        staAuthReqCount++;
+        if ((staAuthReqCount % 4) == 0) {
+            LOG_WARN("HaLow: repeated mesh auth without assoc, check mesh key/channel");
+            printf("HaLow: repeated mesh auth without assoc, check mesh key/channel\n");
+        }
+        break;
+    case MMWLAN_STA_EVT_ASSOC_REQUEST:
+        staAssocReqCount++;
+        break;
+    case MMWLAN_STA_EVT_CTRL_PORT_OPEN:
+        staCtrlPortOpenCount++;
+        break;
+    default:
+        break;
+    }
+
+    LOG_INFO("HaLow: STA_EVT %s (%u)", staEventToStr(sta_event->event), (unsigned)sta_event->event);
+    printf("HaLow: STA_EVT %s (%u)\n", staEventToStr(sta_event->event), (unsigned)sta_event->event);
+}
+
 void HaLowInterface::onMeshScanResult(const struct mmwlan_scan_result *result)
 {
     if (!result || !result->bssid || !result->ies) {
@@ -560,6 +669,7 @@ void HaLowInterface::onMeshScanResult(const struct mmwlan_scan_result *result)
 
     size_t targetLen = strnlen(this->meshId, MMWLAN_SSID_MAXLEN);
     bool meshIdMatches = meshId && meshIdLen == targetLen && memcmp(meshId, this->meshId, targetLen) == 0;
+    staScanResultCount++;
     LOG_INFO("HaLow: scan result bssid=%02x:%02x:%02x:%02x:%02x:%02x rssi=%d ies=%u mesh_id='%.*s' match=%u mesh_cfg=%u",
              result->bssid[0], result->bssid[1], result->bssid[2], result->bssid[3], result->bssid[4], result->bssid[5],
              result->rssi, (unsigned)result->ies_len, (int)meshIdLen, meshId ? (const char *)meshId : "",
@@ -574,6 +684,10 @@ void HaLowInterface::onMeshScanResult(const struct mmwlan_scan_result *result)
 
     meshPeerSeen = true;
     nodeInfoPingPending = true;
+    staMeshAdvSeenCount++;
+    if (meshIdMatches) {
+        staTargetIdHitCount++;
+    }
     lastMeshInfoMs = millis();
     if (result->rssi > bestMeshRssi) {
         bestMeshRssi = result->rssi;
@@ -585,9 +699,12 @@ void HaLowInterface::onMeshScanResult(const struct mmwlan_scan_result *result)
         bestMeshId[copyLen] = '\0';
     }
 
-    LOG_INFO("HaLow: mesh info id='%.*s' bssid=%02x:%02x:%02x:%02x:%02x:%02x rssi=%d mesh_cfg=%u",
+    LOG_INFO("HaLow: remote mesh beacon id='%.*s' bssid=%02x:%02x:%02x:%02x:%02x:%02x rssi=%d mesh_cfg=%u",
              (int)meshIdLen, meshId ? (const char *)meshId : "", result->bssid[0], result->bssid[1], result->bssid[2],
              result->bssid[3], result->bssid[4], result->bssid[5], result->rssi, hasMeshConfig ? 1 : 0);
+    printf("HaLow: remote mesh beacon id='%.*s' bssid=%02x:%02x:%02x:%02x:%02x:%02x rssi=%d mesh_cfg=%u\n",
+           (int)meshIdLen, meshId ? (const char *)meshId : "", result->bssid[0], result->bssid[1], result->bssid[2],
+           result->bssid[3], result->bssid[4], result->bssid[5], result->rssi, hasMeshConfig ? 1 : 0);
 }
 
 void HaLowInterface::onMeshScanComplete(enum mmwlan_scan_state scan_state)

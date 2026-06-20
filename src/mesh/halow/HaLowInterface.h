@@ -38,6 +38,7 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
     ErrorCode send(meshtastic_MeshPacket *p) override;
     meshtastic_QueueStatus getQueueStatus() override;
     uint32_t getPacketTime(uint32_t totalPacketLen, bool received = false) override;
+    bool requestLocalMeshScan() override;
 
   protected:
     int32_t runOnce() override;
@@ -52,7 +53,15 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
     uint32_t lastScanMs = 0;
     uint32_t lastMeshInfoMs = 0;
     uint32_t lastNodeInfoPingMs = 0;
-    uint32_t lastScanStatusLogMs = 0;
+    uint32_t lastMeshStatusLogMs = 0;
+    uint32_t staEventCount = 0;
+    uint32_t staScanCount = 0;
+    uint32_t staScanResultCount = 0;
+    uint32_t staMeshAdvSeenCount = 0;
+    uint32_t staTargetIdHitCount = 0;
+    uint32_t staAuthReqCount = 0;
+    uint32_t staAssocReqCount = 0;
+    uint32_t staCtrlPortOpenCount = 0;
     int16_t bestMeshRssi = -32768;
     uint8_t bestMeshBssid[6] = {0};
     char bestMeshId[33] = {0};
@@ -61,7 +70,7 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
     char countryCode[3] = {0};
 
     void onFrameReceived(const uint8_t *payload, size_t payload_len, int8_t rssi);
-    void startMeshInfoRequest();
+    bool startMeshInfoRequest();
     bool loadMeshProfile();
 
 #ifdef USE_MM_IOT_ESP32
@@ -73,6 +82,7 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
 
     void onMeshScanResult(const struct mmwlan_scan_result *result);
     void onMeshScanComplete(enum mmwlan_scan_state scan_state);
+    void onStaEvent(const struct mmwlan_sta_event_cb_args *sta_event);
 
     // Trampoline registered with mmwlan_register_rx_cb. The callback hands us
     // the 802.3 header and payload separately.
@@ -80,10 +90,10 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
     static void linkStateTrampoline(enum mmwlan_link_state link_state, void *arg);
     static void scanRxTrampoline(const struct mmwlan_scan_result *result, void *arg);
     static void scanCompleteTrampoline(enum mmwlan_scan_state scan_state, void *arg);
+    static void staEventTrampoline(const struct mmwlan_sta_event_cb_args *sta_event, void *arg);
 #endif
 
-    static constexpr uint32_t MESH_INFO_SCAN_INTERVAL_MS = 30000;
-    static constexpr uint32_t SCAN_STATUS_LOG_INTERVAL_MS = 10000;
+    static constexpr uint32_t MESH_STATUS_LOG_INTERVAL_MS = 10000;
     static constexpr uint32_t NODEINFO_PING_INTERVAL_MS = 60000;
     static constexpr uint8_t WLAN_IE_ID_MESH_CONFIG = 113;
     static constexpr uint8_t WLAN_IE_ID_MESH_ID = 114;

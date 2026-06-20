@@ -4,6 +4,7 @@
 #include "MeshService.h"
 #include "PowerFSM.h"
 #include "RadioInterface.h"
+#include "Router.h"
 #include "modules/NodeInfoModule.h"
 
 PacketAPI *packetAPI = nullptr;
@@ -73,6 +74,9 @@ bool PacketAPI::receivePacket(void)
         }
         case meshtastic_ToRadio_heartbeat_tag:
             if (mr->heartbeat.nonce == 1) {
+                if (router && router->requestLocalMeshScan()) {
+                    LOG_INFO("Requested radio local mesh scan");
+                }
                 if (nodeInfoModule) {
                     LOG_INFO("Broadcasting nodeinfo ping");
                     nodeInfoModule->sendOurNodeInfo(NODENUM_BROADCAST, true, 0, true);

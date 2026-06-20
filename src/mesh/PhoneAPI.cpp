@@ -219,6 +219,9 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
             // Default nonce (0) remains a plain keepalive that triggers
             // a queue-status reply.
             if (toRadioScratch.heartbeat.nonce == 1) {
+                if (router && router->requestLocalMeshScan()) {
+                    LOG_INFO("Requested radio local mesh scan (serial)");
+                }
                 if (nodeInfoModule) {
                     LOG_INFO("Broadcasting nodeinfo ping (serial)");
                     nodeInfoModule->sendOurNodeInfo(NODENUM_BROADCAST, true, 0, true);
