@@ -373,9 +373,8 @@ bool HaLowInterface::startMeshStation()
     struct mmwlan_sta_args staArgs = MMWLAN_STA_ARGS_INIT;
     staArgs.ssid_len = strnlen(meshId, sizeof(staArgs.ssid));
     memcpy(staArgs.ssid, meshId, staArgs.ssid_len);
-    staArgs.passphrase_len = strnlen(meshKey, sizeof(meshKey));
-    memcpy(staArgs.passphrase, meshKey, staArgs.passphrase_len);
-    staArgs.security_type = staArgs.passphrase_len > 0 ? MMWLAN_SAE : MMWLAN_OPEN;
+    staArgs.passphrase_len = 0;
+    staArgs.security_type = MMWLAN_OPEN;
     staArgs.scan_rx_cb = scanRxTrampoline;
     staArgs.scan_rx_cb_arg = this;
     staArgs.sta_evt_cb = staEventTrampoline;
@@ -407,10 +406,10 @@ bool HaLowInterface::startMeshStation()
     bestMeshRssi = -32768;
     bestMeshId[0] = '\0';
 
-    LOG_INFO("HaLow: 802.11s mesh enabled id='%s' country=%s key=%s", meshId, countryCode,
-             staArgs.passphrase_len > 0 ? "primary-psk" : "open");
-    printf("HaLow: 802.11s mesh enabled id='%s' country=%s key=%s\n", meshId, countryCode,
-           staArgs.passphrase_len > 0 ? "primary-psk" : "open");
+    LOG_INFO("HaLow: raw 802.11ah bearer enabled id='%s' country=%s wifi_key=open meshtastic_key=%s", meshId, countryCode,
+             meshKey[0] ? "primary-psk" : "open");
+    printf("HaLow: raw 802.11ah bearer enabled id='%s' country=%s wifi_key=open meshtastic_key=%s\n", meshId, countryCode,
+           meshKey[0] ? "primary-psk" : "open");
     printf("HaLow: mesh internal scan retry base=%us limit=%us; app local scan still triggers immediate scan\n",
            (unsigned)staArgs.scan_interval_base_s, (unsigned)staArgs.scan_interval_limit_s);
     printf("HaLow: MESH_ADVERTISER enabled, waiting for beacon/probe-response callbacks\n");
