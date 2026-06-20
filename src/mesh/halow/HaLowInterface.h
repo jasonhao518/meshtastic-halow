@@ -95,6 +95,8 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
 
     static constexpr uint32_t MESH_STATUS_LOG_INTERVAL_MS = 10000;
     static constexpr uint32_t NODEINFO_PING_INTERVAL_MS = 60000;
+    static constexpr uint16_t MESH_CONNECT_SCAN_BASE_S = 60;
+    static constexpr uint16_t MESH_CONNECT_SCAN_LIMIT_S = 600;
     static constexpr uint8_t WLAN_IE_ID_MESH_CONFIG = 113;
     static constexpr uint8_t WLAN_IE_ID_MESH_ID = 114;
     // Approximate bytes-per-millisecond at the configured channel width / MCS.

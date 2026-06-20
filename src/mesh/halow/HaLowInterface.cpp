@@ -380,8 +380,10 @@ bool HaLowInterface::startMeshStation()
     staArgs.scan_rx_cb_arg = this;
     staArgs.sta_evt_cb = staEventTrampoline;
     staArgs.sta_evt_cb_arg = this;
-    staArgs.scan_interval_base_s = 1;
-    staArgs.scan_interval_limit_s = 8;
+    staArgs.bgscan_short_interval_s = 0;
+    staArgs.bgscan_long_interval_s = 0;
+    staArgs.scan_interval_base_s = MESH_CONNECT_SCAN_BASE_S;
+    staArgs.scan_interval_limit_s = MESH_CONNECT_SCAN_LIMIT_S;
     staArgs.mesh_mode = true;
 
     enum mmwlan_status meshStatus = mmwlan_sta_enable(&staArgs, NULL);
@@ -409,6 +411,8 @@ bool HaLowInterface::startMeshStation()
              staArgs.passphrase_len > 0 ? "primary-psk" : "open");
     printf("HaLow: 802.11s mesh enabled id='%s' country=%s key=%s\n", meshId, countryCode,
            staArgs.passphrase_len > 0 ? "primary-psk" : "open");
+    printf("HaLow: mesh internal scan retry base=%us limit=%us; app local scan still triggers immediate scan\n",
+           (unsigned)staArgs.scan_interval_base_s, (unsigned)staArgs.scan_interval_limit_s);
     printf("HaLow: MESH_ADVERTISER enabled, waiting for beacon/probe-response callbacks\n");
     return true;
 }

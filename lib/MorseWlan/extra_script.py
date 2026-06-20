@@ -34,6 +34,10 @@ def _get_define(name, default):
     return default
 
 
+def _define_enabled(name):
+    return _get_define(name, "0").lower() in ("1", "y", "yes", "true", "on")
+
+
 def _find_blob(name):
     basename = os.path.basename(name)
     roots = [
@@ -118,22 +122,87 @@ def _build_archive(target, source, env):
         _run([ranlib, target_path])
 
 
+def _build_source_archive(target, source, env):
+    target_path = str(target[0])
+    objects = [str(s) for s in source]
+    ar = env.subst("$AR")
+    ranlib = env.subst("$RANLIB")
+    objcopy = _toolchain_program("objcopy")
+    toolchain_base = objcopy[:-len("objcopy")] if objcopy.endswith("objcopy") else ""
+    mangler = os.path.join(SDK_DIR, "tools", "buildsystem", "librarymangler.py")
+    protected_syms = os.path.join(SDK_DIR, "tools", "metadata", "protected_syms.txt")
+    metadata_dir = os.path.join(OUT_DIR, "mangle")
+
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    script = ["CREATE " + target_path]
+    script.extend("ADDMOD " + obj for obj in objects)
+    script.extend(["SAVE", "END"])
+    print(f"Creating source-built Morse archive: {target_path}")
+    proc = subprocess.Popen([ar, "-M"], stdin=subprocess.PIPE)
+    proc.communicate(("\n".join(script) + "\n").encode())
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, [ar, "-M"])
+    if ranlib:
+        _run([ranlib, target_path])
+
+    protected_args = []
+    with open(protected_syms) as f:
+        for line in f:
+            sym = line.strip()
+            if sym and not sym.startswith("#"):
+                protected_args.extend(["-p", sym])
+    _run([mangler, "-t", toolchain_base, "-m", metadata_dir] + protected_args + [target_path])
+    if ranlib:
+        _run([ranlib, target_path])
+
+
+def _glob_c(root):
+    matches = []
+    for dirpath, _, filenames in os.walk(root):
+        for filename in filenames:
+            if filename.endswith(".c"):
+                matches.append(os.path.join(dirpath, filename))
+    return sorted(matches)
+
+
+def _hostap_sources():
+    cmake = os.path.join(SDK_SRC, "hostap", "CMakeLists.txt")
+    with open(cmake) as f:
+        content = f.read()
+    return [
+        os.path.join(SDK_SRC, "hostap", path)
+        for path in re.findall(r'"([^"]+\.c)"', content)
+    ]
+
+
 if not os.path.isdir(SDK_DIR):
     raise RuntimeError("third_party/mm-iot-esp32 submodule is missing; run git submodule update --init --recursive")
 
 target = "esp32s3"
-libmorse = os.path.join(SDK_MORSELIB, "lib", target, "libmorse.a")
-if not os.path.isfile(libmorse):
+source_build_morse = _define_enabled("CONFIG_BUILD_MORSELIB_FROM_SOURCE")
+libmorse = os.path.join(OUT_DIR, "libmorse_source.a") if source_build_morse else os.path.join(SDK_MORSELIB, "lib", target, "libmorse.a")
+if not source_build_morse and not os.path.isfile(libmorse):
     raise RuntimeError(f"missing mm-iot-esp32 Morselib archive: {libmorse}")
+print(f"Using Morse archive: {'source build' if source_build_morse else libmorse}")
 
 include_dirs = [
     os.path.join(SDK_MORSELIB, "include"),
+    os.path.join(SDK_MORSELIB, "src"),
+    os.path.join(SDK_MORSELIB, "src", "internal"),
     os.path.join(SDK_SHIMS, "include", target),
     os.path.join(SDK_SRC, "mmutils"),
     os.path.join(SDK_SRC, "mmpktmem"),
     os.path.join(SDK_SRC, "mmregdb"),
     os.path.join(SDK_SRC, "mmipal"),
     os.path.join(SDK_SRC, "mmipal", "lwip"),
+    SDK_SRC,
+    os.path.join(SDK_SRC, "hostap"),
+    os.path.join(SDK_SRC, "hostap", "src"),
+    os.path.join(SDK_SRC, "hostap", "src", "common"),
+    os.path.join(SDK_SRC, "hostap", "src", "utils"),
+    os.path.join(SDK_SRC, "hostap", "wpa_supplicant"),
+    os.path.join(SDK_MORSELIB, "mmrc", "src", "core"),
+    os.path.join(SDK_MORSELIB, "src", "umac", "rc", "mmrc_osal"),
 ]
 
 shim_sources = [
@@ -154,7 +223,37 @@ build_env.Prepend(CPPPATH=include_dirs)
 build_env.Append(
     CPPDEFINES=[
         "CONFIG_IEEE80211AH",
+        "CONFIG_AP",
+        "CONFIG_AUTOSCAN",
+        "CONFIG_AUTOSCAN_EXPONENTIAL",
+        "CONFIG_BGSCAN",
+        "CONFIG_BGSCAN_SIMPLE",
+        "CONFIG_ECC",
+        "CONFIG_FIPS",
         "MM_IOT",
+        "CONFIG_MESH",
+        "CONFIG_NO_ACCOUNTING",
+        "CONFIG_NO_BSS_TRANS_MGMT",
+        "CONFIG_NO_CONFIG_BLOBS",
+        "CONFIG_NO_CONFIG_WRITE",
+        "CONFIG_NO_RADIUS",
+        "CONFIG_NO_RANDOM_POOL",
+        "CONFIG_NO_RC4",
+        "CONFIG_NO_ROBUST_AV",
+        "CONFIG_NO_RRM",
+        "CONFIG_NO_VLAN",
+        "CONFIG_OPENSSL_INTERNAL_AES_WRAP",
+        "CONFIG_OWE",
+        "CONFIG_S1G_TWT",
+        "CONFIG_SAE",
+        "CONFIG_SHA256",
+        "CONFIG_SHA384",
+        "CONFIG_SHA512",
+        "CONFIG_SME",
+        "CONFIG_WNM",
+        "IEEE8021X_EAPOL",
+        "MAX_NUM_MLD_LINKS=1",
+        "MAX_NUM_MLO_LINKS=1",
         ("CONFIG_MMHAL_CHIP_TYPE_MM6108", 1),
         ("CONFIG_MMHAL_CHIP_TYPE_MM8108", 0),
         ("CONFIG_MM_EXPERIMENTAL_MESH", 1),
@@ -170,7 +269,10 @@ build_env.Append(
         ("MESH_PREQ_INTERVAL_MS", 4000),
         ("MMPKTMEM_TX_POOL_N_BLOCKS", 20),
         ("MMPKTMEM_RX_POOL_N_BLOCKS", 23),
+        "NEED_AP_MLME",
         ("ON_DEMAND_TIMERS_ENABLED", 0),
+        "OS_NO_C_LIB_DEFINES",
+        ("WPA_SUPPLICANT_CLEANUP_INTERVAL", 120),
     ],
     CCFLAGS=[
         "-Wno-c++-compat",
@@ -196,8 +298,26 @@ for src in shim_sources:
     obj = os.path.join(OUT_DIR, "obj", rel + ".o")
     objects.extend(build_env.Object(obj, src))
 
+if source_build_morse:
+    morse_sources = _glob_c(os.path.join(SDK_MORSELIB, "src"))
+    morse_sources.extend(_glob_c(os.path.join(SDK_MORSELIB, "mmrc", "src", "core")))
+    if not _define_enabled("CONFIG_WPA_DPP_SUPPORT"):
+        dpp_source = os.path.join(SDK_MORSELIB, "src", "umac", "supplicant_shim", "morse_dpp_event.c")
+        morse_sources = [src for src in morse_sources if src != dpp_source]
+    morse_sources.extend(_hostap_sources())
+
+    morse_objects = []
+    for src in morse_sources:
+        rel = os.path.relpath(src, SDK_DIR)
+        obj = os.path.join(OUT_DIR, "morselib_obj", rel + ".o")
+        morse_objects.extend(build_env.Object(obj, src))
+
+    libmorse_node = env.Command(libmorse, morse_objects, _build_source_archive)
+else:
+    libmorse_node = [libmorse]
+
 archive = os.path.join(OUT_DIR, "libmm_iot_esp32.a")
-archive_node = env.Command(archive, [libmorse] + objects, _build_archive)
+archive_node = env.Command(archive, list(libmorse_node) + objects, _build_archive)
 
 fw_file = _get_define("CONFIG_MM_FW_FILE", "mm6108.mbin")
 bcf_file = _get_define("CONFIG_MM_BCF_FILE", "bcf_mf08651_us.mbin")
