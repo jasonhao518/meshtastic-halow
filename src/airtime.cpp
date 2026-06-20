@@ -133,7 +133,7 @@ bool AirTime::isTxAllowedChannelUtil(bool polite)
 
 bool AirTime::isTxAllowedAirUtil()
 {
-    if (!config.lora.override_duty_cycle && myRegion->dutyCycle < 100) {
+    if (isDutyCycleEnforced() && !config.lora.override_duty_cycle && myRegion->dutyCycle < 100) {
         if (utilizationTXPercent() < myRegion->dutyCycle * polite_duty_cycle_percent / 100) {
             return true;
         } else {
@@ -142,6 +142,15 @@ bool AirTime::isTxAllowedAirUtil()
         }
     }
     return true;
+}
+
+bool AirTime::isDutyCycleEnforced() const
+{
+#ifdef USE_HALOW_RADIO
+    return false;
+#else
+    return true;
+#endif
 }
 
 // Get the amount of minutes we have to be silent before we can send again

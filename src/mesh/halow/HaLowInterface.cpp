@@ -106,6 +106,35 @@ static void bytesToHex(const uint8_t *bytes, size_t len, char *out, size_t outLe
     out[pos] = '\0';
 }
 
+static void logHaLowMeshPacket(const char *direction, const uint8_t *buffer, size_t len, int rssi, bool hasRssi)
+{
+    if (!buffer || len < sizeof(PacketHeader)) {
+        return;
+    }
+
+    static constexpr size_t HEX_PREVIEW_BYTES = 64;
+    const PacketHeader *h = reinterpret_cast<const PacketHeader *>(buffer);
+    size_t payloadLen = len - sizeof(PacketHeader);
+    size_t hexLen = std::min(len, HEX_PREVIEW_BYTES);
+    char hex[(HEX_PREVIEW_BYTES * 2) + 1] = {0};
+    char rssiText[12] = "n/a";
+    bytesToHex(buffer, hexLen, hex, sizeof(hex));
+    if (hasRssi) {
+        snprintf(rssiText, sizeof(rssiText), "%d", rssi);
+    }
+
+    uint8_t hopLimit = h->flags & PACKET_FLAGS_HOP_LIMIT_MASK;
+    uint8_t hopStart = (h->flags & PACKET_FLAGS_HOP_START_MASK) >> PACKET_FLAGS_HOP_START_SHIFT;
+    LOG_INFO("HaLowPacket %s len=%u payload=%u from=0x%08x to=0x%08x id=0x%08x ch=%u flags=0x%02x hop=%u start=%u "
+             "next=0x%02x relay=0x%02x rssi=%s hex%u=%s%s",
+             direction, (unsigned)len, (unsigned)payloadLen, h->from, h->to, h->id, h->channel, h->flags, hopLimit,
+             hopStart, h->next_hop, h->relay_node, rssiText, (unsigned)hexLen, hex, len > hexLen ? "..." : "");
+    printf("HaLowPacket %s len=%u payload=%u from=0x%08x to=0x%08x id=0x%08x ch=%u flags=0x%02x hop=%u start=%u "
+           "next=0x%02x relay=0x%02x rssi=%s hex%u=%s%s\n",
+           direction, (unsigned)len, (unsigned)payloadLen, h->from, h->to, h->id, h->channel, h->flags, hopLimit, hopStart,
+           h->next_hop, h->relay_node, rssiText, (unsigned)hexLen, hex, len > hexLen ? "..." : "");
+}
+
 #ifdef USE_MM_IOT_ESP32
 static const char *staEventToStr(enum mmwlan_sta_event evt)
 {
@@ -645,15 +674,18 @@ ErrorCode HaLowInterface::send(meshtastic_MeshPacket *p)
     }
 
 #ifdef USE_MM_IOT_ESP32
-    if (!meshEnabled) {
+    if (!meshEnabled || disabled || !config.lora.tx_enabled) {
+        LOG_WARN("HaLow: drop tx id=0x%08x mesh=%u disabled=%u tx_enabled=%u", p->id, meshEnabled ? 1 : 0, disabled ? 1 : 0,
+                 config.lora.tx_enabled ? 1 : 0);
         packetPool.release(p);
-        return ERRNO_DISABLED;
+        return (!meshEnabled || disabled) ? ERRNO_DISABLED : ERRNO_UNKNOWN;
     }
 
     // beginSending() serializes the MeshPacket into radioBuffer (PacketHeader
     // + payload). We then prepend a 14-byte 802.3 header for mmwlan.
     size_t encoded = beginSending(p);
     if (encoded == 0) {
+        sendingPacket = NULL;
         packetPool.release(p);
         return ERRNO_UNKNOWN;
     }
@@ -661,9 +693,12 @@ ErrorCode HaLowInterface::send(meshtastic_MeshPacket *p)
     uint8_t txbuf[sizeof(HaLowEthFrameHeader) + sizeof(RadioBuffer)];
     if (encoded > sizeof(RadioBuffer)) {
         LOG_ERROR("HaLow: encoded %u > radioBuffer", (unsigned)encoded);
+        sendingPacket = NULL;
         packetPool.release(p);
         return ERRNO_UNKNOWN;
     }
+
+    logHaLowMeshPacket("tx", reinterpret_cast<const uint8_t *>(&radioBuffer), encoded, 0, false);
 
     // Ethernet header: DA(6) || SA(6) || EtherType(2, big-endian).
     memcpy(txbuf, HALOW_BROADCAST_MAC, 6);
@@ -690,6 +725,7 @@ ErrorCode HaLowInterface::send(meshtastic_MeshPacket *p)
     }
     if (st == MMWLAN_SUCCESS) {
         LOG_DEBUG("HaLow: tx queued id=0x%08x len=%u", p->id, (unsigned)(sizeof(HaLowEthFrameHeader) + encoded));
+        airTime->logAirtime(TX_LOG, RadioInterface::getPacketTime(p));
     } else {
         LOG_WARN("HaLow: tx failed id=0x%08x status=%d", p->id, (int)st);
         printf("HaLow: tx failed id=0x%08x status=%d\n", p->id, (int)st);
@@ -997,10 +1033,7 @@ void HaLowInterface::onFrameReceived(const uint8_t *payload, size_t payload_len,
     p->rx_snr = 0;
     p->rx_time = getValidTime(RTCQualityFromNet);
 
-    LOG_INFO("HaLow: rx mesh packet from=0x%08x to=0x%08x id=0x%08x ch=%u payload=%u rssi=%d", p->from, p->to, p->id,
-             p->channel, (unsigned)p->encrypted.size, p->rx_rssi);
-    printf("HaLow: rx mesh packet from=0x%08x to=0x%08x id=0x%08x ch=%u payload=%u rssi=%d\n", p->from, p->to, p->id,
-           p->channel, (unsigned)p->encrypted.size, p->rx_rssi);
+    logHaLowMeshPacket("rx", payload, payload_len, p->rx_rssi, true);
 
     deliverToReceiver(p);
 }

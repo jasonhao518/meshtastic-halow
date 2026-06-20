@@ -61,6 +61,7 @@ class AirTime : private concurrency::OSThread
     uint8_t getSilentMinutes(float txPercent, float dutyCycle);
     bool isTxAllowedChannelUtil(bool polite = false);
     bool isTxAllowedAirUtil();
+    bool isDutyCycleEnforced() const;
 
   private:
     bool firstTime = true;
