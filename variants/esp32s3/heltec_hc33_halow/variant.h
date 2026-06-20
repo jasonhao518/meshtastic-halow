@@ -1,5 +1,5 @@
 /*
- * Seeed Studio XIAO ESP32-S3 + Heltec HT-HC33 Wi-Fi HaLow module.
+ * Heltec HT-HC33 Wi-Fi HaLow device.
  *
  * This variant deliberately ships without LoRa, GPS, or the SSD1306 OLED. The
  * HaLow module replaces the RF path and owns its SPI/control pins directly.
