@@ -10,6 +10,8 @@
 #include "Throttle.h"
 #include "main.h"
 #include <algorithm>
+#include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 
 #ifdef USE_MM_IOT_ESP32
@@ -19,6 +21,8 @@ extern "C" {
 #include "mmregdb.h"
 #include "mmwlan.h"
 }
+#include "driver/gpio.h"
+#include "soc/gpio_reg.h"
 
 #ifndef HALOW_MESH_SCAN_DWELL_MS
 #define HALOW_MESH_SCAN_DWELL_MS 120
@@ -157,6 +161,7 @@ HaLowInterface::~HaLowInterface() = default;
 
 bool HaLowInterface::init()
 {
+    printf("HaLow: init entry\n");
     RadioInterface::init();
 
 #ifdef USE_MM_IOT_ESP32
@@ -164,70 +169,65 @@ bool HaLowInterface::init()
         return false;
     }
 
+    gpio_config_t irqPin = {};
+    irqPin.pin_bit_mask = (1ULL << CONFIG_MM_SPI_IRQ) | (1ULL << CONFIG_MM_BUSY);
+    irqPin.mode = GPIO_MODE_INPUT;
+    irqPin.pull_up_en = GPIO_PULLUP_DISABLE;
+    irqPin.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    irqPin.intr_type = GPIO_INTR_DISABLE;
+    gpio_config(&irqPin);
+    gpio_intr_disable((gpio_num_t)CONFIG_MM_SPI_IRQ);
+    gpio_intr_disable((gpio_num_t)CONFIG_MM_BUSY);
+    REG_WRITE(GPIO_STATUS_W1TC_REG, UINT32_MAX);
+    REG_WRITE(GPIO_STATUS1_W1TC_REG, UINT32_MAX);
+    printf("HaLow: cleared pending Morse GPIO interrupts\n");
+
     LOG_INFO("HaLow: mmhal_init()");
+    printf("HaLow: calling mmhal_init\n");
+    fflush(stdout);
     mmhal_init();
+    printf("HaLow: mmhal_init complete\n");
+    fflush(stdout);
 
     LOG_INFO("HaLow: mmwlan_init()");
+    printf("HaLow: calling mmwlan_init\n");
+    fflush(stdout);
     mmwlan_init();
+    printf("HaLow: mmwlan_init complete\n");
+    fflush(stdout);
 
-    const struct mmwlan_s1g_channel_list *channel_list = mmwlan_lookup_regulatory_domain(get_regulatory_db(), countryCode);
-    if (!channel_list) {
-        LOG_ERROR("HaLow: country %s not in regdb", countryCode);
-        return false;
-    }
-    if (mmwlan_set_channel_list(channel_list) != MMWLAN_SUCCESS) {
-        LOG_ERROR("HaLow: set_channel_list failed");
+    if (!applyChannelList()) {
         return false;
     }
 
     struct mmwlan_boot_args boot_args = MMWLAN_BOOT_ARGS_INIT;
+    printf("HaLow: calling mmwlan_boot\n");
+    fflush(stdout);
     enum mmwlan_status st = mmwlan_boot(&boot_args);
     if (st != MMWLAN_SUCCESS) {
         LOG_ERROR("HaLow: mmwlan_boot failed (%d) — firmware load or SPI wiring", (int)st);
+        printf("HaLow: mmwlan_boot failed (%d)\n", (int)st);
         return false;
     }
+    printf("HaLow: mmwlan_boot complete\n");
+    wlanReady = true;
 
     struct mmwlan_version version;
     if (mmwlan_get_version(&version) == MMWLAN_SUCCESS) {
         LOG_INFO("HaLow: chip 0x%lx, fw %s, lib %s", (unsigned long)version.morse_chip_id, version.morse_fw_version,
                  version.morselib_version);
+        printf("HaLow: chip 0x%lx, fw %s, lib %s\n", (unsigned long)version.morse_chip_id, version.morse_fw_version,
+               version.morselib_version);
     }
 
     mmwlan_register_link_state_cb(linkStateTrampoline, this);
     if (mmwlan_register_rx_cb(rxTrampoline, this) != MMWLAN_SUCCESS) {
         LOG_ERROR("HaLow: register_rx_cb failed");
+        printf("HaLow: register_rx_cb failed\n");
         return false;
     }
 
-    struct mmwlan_scan_config scanConfig = MMWLAN_SCAN_CONFIG_INIT;
-    scanConfig.dwell_time_ms = HALOW_MESH_SCAN_DWELL_MS;
-    scanConfig.home_channel_dwell_time_ms = 0;
-    if (mmwlan_set_scan_config(&scanConfig) != MMWLAN_SUCCESS) {
-        LOG_WARN("HaLow: set mesh scan config failed");
-    }
-
-    struct mmwlan_sta_args staArgs = MMWLAN_STA_ARGS_INIT;
-    staArgs.ssid_len = strnlen(meshId, sizeof(staArgs.ssid));
-    memcpy(staArgs.ssid, meshId, staArgs.ssid_len);
-    staArgs.passphrase_len = strnlen(meshKey, sizeof(meshKey));
-    memcpy(staArgs.passphrase, meshKey, staArgs.passphrase_len);
-    staArgs.security_type = staArgs.passphrase_len > 0 ? MMWLAN_SAE : MMWLAN_OPEN;
-    staArgs.scan_rx_cb = scanRxTrampoline;
-    staArgs.scan_rx_cb_arg = this;
-    staArgs.scan_interval_base_s = 1;
-    staArgs.scan_interval_limit_s = 8;
-    staArgs.mesh_mode = true;
-
-    enum mmwlan_status meshStatus = mmwlan_sta_enable(&staArgs, NULL);
-    if (meshStatus != MMWLAN_SUCCESS) {
-        LOG_ERROR("HaLow: mesh STA enable failed (%d)", (int)meshStatus);
-        return false;
-    }
-
-    LOG_INFO("HaLow: 802.11s mesh enabled id='%s' country=%s key=%s", meshId, countryCode,
-             staArgs.passphrase_len > 0 ? "primary-psk" : "open");
-    startMeshInfoRequest();
-    return true;
+    return startMeshStation();
 #else
     LOG_WARN("HaLow: built without USE_MM_IOT_ESP32, transport is a stub");
     return false;
@@ -236,17 +236,44 @@ bool HaLowInterface::init()
 
 bool HaLowInterface::reconfigure()
 {
-    return true;
+#ifdef USE_MM_IOT_ESP32
+    if (!wlanReady) {
+        return false;
+    }
+
+    if (meshEnabled) {
+        mmwlan_sta_disable();
+        meshEnabled = false;
+        linkUp = false;
+        scanInProgress = false;
+    }
+
+    if (!loadMeshProfile() || !applyChannelList()) {
+        return false;
+    }
+
+    return startMeshStation();
+#else
+    return false;
+#endif
 }
 
 bool HaLowInterface::sleep()
 {
+#ifdef USE_MM_IOT_ESP32
+    if (meshEnabled) {
+        mmwlan_sta_disable();
+        meshEnabled = false;
+        linkUp = false;
+        scanInProgress = false;
+    }
+#endif
     return true;
 }
 
 bool HaLowInterface::canSleep()
 {
-    return true;
+    return sendingPacket == nullptr;
 }
 
 bool HaLowInterface::loadMeshProfile()
@@ -279,6 +306,66 @@ bool HaLowInterface::loadMeshProfile()
     return true;
 }
 
+#ifdef USE_MM_IOT_ESP32
+bool HaLowInterface::applyChannelList()
+{
+    const struct mmwlan_s1g_channel_list *channel_list = mmwlan_lookup_regulatory_domain(get_regulatory_db(), countryCode);
+    if (!channel_list) {
+        LOG_ERROR("HaLow: country %s not in regdb", countryCode);
+        printf("HaLow: country %s not in regdb\n", countryCode);
+        return false;
+    }
+    if (mmwlan_set_channel_list(channel_list) != MMWLAN_SUCCESS) {
+        LOG_ERROR("HaLow: set_channel_list failed");
+        printf("HaLow: set_channel_list failed\n");
+        return false;
+    }
+    printf("HaLow: regulatory domain %s set\n", countryCode);
+    return true;
+}
+
+bool HaLowInterface::startMeshStation()
+{
+    struct mmwlan_scan_config scanConfig = MMWLAN_SCAN_CONFIG_INIT;
+    scanConfig.dwell_time_ms = HALOW_MESH_SCAN_DWELL_MS;
+    scanConfig.home_channel_dwell_time_ms = 0;
+    if (mmwlan_set_scan_config(&scanConfig) != MMWLAN_SUCCESS) {
+        LOG_WARN("HaLow: set mesh scan config failed");
+    }
+
+    struct mmwlan_sta_args staArgs = MMWLAN_STA_ARGS_INIT;
+    staArgs.ssid_len = strnlen(meshId, sizeof(staArgs.ssid));
+    memcpy(staArgs.ssid, meshId, staArgs.ssid_len);
+    staArgs.passphrase_len = strnlen(meshKey, sizeof(meshKey));
+    memcpy(staArgs.passphrase, meshKey, staArgs.passphrase_len);
+    staArgs.security_type = staArgs.passphrase_len > 0 ? MMWLAN_SAE : MMWLAN_OPEN;
+    staArgs.scan_rx_cb = scanRxTrampoline;
+    staArgs.scan_rx_cb_arg = this;
+    staArgs.scan_interval_base_s = 1;
+    staArgs.scan_interval_limit_s = 8;
+    staArgs.mesh_mode = true;
+
+    enum mmwlan_status meshStatus = mmwlan_sta_enable(&staArgs, NULL);
+    if (meshStatus != MMWLAN_SUCCESS) {
+        LOG_ERROR("HaLow: mesh STA enable failed (%d)", (int)meshStatus);
+        printf("HaLow: mesh STA enable failed (%d)\n", (int)meshStatus);
+        return false;
+    }
+
+    meshEnabled = true;
+    meshPeerSeen = false;
+    bestMeshRssi = -32768;
+    bestMeshId[0] = '\0';
+
+    LOG_INFO("HaLow: 802.11s mesh enabled id='%s' country=%s key=%s", meshId, countryCode,
+             staArgs.passphrase_len > 0 ? "primary-psk" : "open");
+    printf("HaLow: 802.11s mesh enabled id='%s' country=%s key=%s\n", meshId, countryCode,
+           staArgs.passphrase_len > 0 ? "primary-psk" : "open");
+    startMeshInfoRequest();
+    return true;
+}
+#endif
+
 ErrorCode HaLowInterface::send(meshtastic_MeshPacket *p)
 {
     if (!p) {
@@ -286,7 +373,7 @@ ErrorCode HaLowInterface::send(meshtastic_MeshPacket *p)
     }
 
 #ifdef USE_MM_IOT_ESP32
-    if (!linkUp) {
+    if (!meshEnabled) {
         packetPool.release(p);
         return ERRNO_DISABLED;
     }
@@ -341,7 +428,7 @@ ErrorCode HaLowInterface::send(meshtastic_MeshPacket *p)
 meshtastic_QueueStatus HaLowInterface::getQueueStatus()
 {
     meshtastic_QueueStatus qs = meshtastic_QueueStatus_init_zero;
-    qs.free = linkUp ? 16 : 0;
+    qs.free = meshEnabled ? 16 : 0;
     qs.maxlen = 16;
     return qs;
 }
@@ -357,7 +444,7 @@ uint32_t HaLowInterface::getPacketTime(uint32_t totalPacketLen, bool /*received*
 int32_t HaLowInterface::runOnce()
 {
 #ifdef USE_MM_IOT_ESP32
-    if (!scanInProgress && !Throttle::isWithinTimespanMs(lastScanMs, MESH_INFO_SCAN_INTERVAL_MS)) {
+    if (meshEnabled && !scanInProgress && !Throttle::isWithinTimespanMs(lastScanMs, MESH_INFO_SCAN_INTERVAL_MS)) {
         startMeshInfoRequest();
     }
 #endif

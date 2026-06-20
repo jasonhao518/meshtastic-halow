@@ -46,6 +46,8 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
     volatile bool linkUp = false;
     volatile bool scanInProgress = false;
     volatile bool meshPeerSeen = false;
+    bool wlanReady = false;
+    bool meshEnabled = false;
     uint32_t lastScanMs = 0;
     uint32_t lastMeshInfoMs = 0;
     int16_t bestMeshRssi = -32768;
@@ -60,6 +62,9 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
     bool loadMeshProfile();
 
 #ifdef USE_MM_IOT_ESP32
+    bool applyChannelList();
+    bool startMeshStation();
+
     uint8_t meshScanIes[2 + MMWLAN_SSID_MAXLEN] = {0};
     struct mmwlan_scan_req meshScanReq = MMWLAN_SCAN_REQ_INIT;
 

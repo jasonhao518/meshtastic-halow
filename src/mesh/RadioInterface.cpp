@@ -526,16 +526,16 @@ std::unique_ptr<RadioInterface> initLoRa()
     }
 
 #ifdef USE_HALOW_RADIO
-    // HaLow is the only radio on the dedicated XIAO+HaLow variant, so we only
-    // try it when no LoRa chip claimed the slot. The interface itself stubs
-    // out cleanly when USE_MM_IOT_ESP32 is not yet wired in (Phase 0 of plan).
+    // HaLow is a RadioInterface implementation for variants where the RF
+    // module is MM6108 instead of a Semtech LoRa chipset.
     if (!rIf) {
         auto halowIf = std::unique_ptr<HaLowInterface>(new HaLowInterface());
         if (!halowIf->init()) {
-            LOG_WARN("HaLow init failed (stub or SDK not present)");
+            LOG_WARN("HaLow radio init failed");
         } else {
-            LOG_INFO("HaLow init success");
+            LOG_INFO("HaLow radio init success");
             rIf = std::move(halowIf);
+            radioType = HALOW_RADIO;
         }
     }
 #endif
