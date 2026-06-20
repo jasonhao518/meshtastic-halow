@@ -6,15 +6,11 @@
 #include "MeshTypes.h"
 #include "RTC.h" // getValidTime / RTCQualityFromNet
 #include <string.h>
-#if HAS_UDP_MULTICAST
-#include "main.h" // for `udpHandler`
-#include "mesh/generated/meshtastic/config.pb.h"
-#endif
 
 #ifdef USE_MM_IOT_ESP32
 extern "C" {
+#include "mmpkt.h"
 #include "mmhal.h"
-#include "mmipal.h"
 #include "mmwlan.h"
 #include "mmwlan_regdb.def"
 }
@@ -35,26 +31,18 @@ extern "C" {
 HaLowInterface::HaLowInterface() : concurrency::OSThread("HaLow") {}
 
 #ifdef USE_MM_IOT_ESP32
-// Static glue so the C callbacks can reach into the (non-static) instance.
-// Only one HaLowInterface exists, owned by Router::iface or constructed at
-// boot, so a single pointer is sufficient.
-static HaLowInterface *s_instance = nullptr;
-
-static void halow_link_state_cb(enum mmwlan_link_state link_state, void *arg)
+void HaLowInterface::linkStateTrampoline(enum mmwlan_link_state link_state, void *arg)
 {
-    (void)arg;
+    HaLowInterface *self = static_cast<HaLowInterface *>(arg);
+    if (!self) {
+        return;
+    }
+
     if (link_state == MMWLAN_LINK_UP) {
-        struct mmipal_ip_config ipcfg = {};
-        if (mmipal_get_ip_config(&ipcfg) == MMIPAL_SUCCESS) {
-            LOG_INFO("HaLow: link UP, ip=%s netmask=%s gw=%s", ipcfg.ip_addr, ipcfg.netmask, ipcfg.gateway_addr);
-        } else {
-            LOG_INFO("HaLow: link UP (no IP yet)");
-        }
-        int32_t rssi = mmwlan_get_rssi();
-        if (rssi != INT32_MIN) {
-            LOG_INFO("HaLow: AP RSSI %ld dBm", (long)rssi);
-        }
+        self->linkUp = true;
+        LOG_INFO("HaLow: link UP");
     } else {
+        self->linkUp = false;
         LOG_INFO("HaLow: link DOWN");
     }
 }
@@ -113,14 +101,6 @@ bool HaLowInterface::init()
                  version.morselib_version);
     }
 
-    // Bring up the LWIP netif (DHCP by default). mmipal plugs into the
-    // Arduino-ESP32 framework's LWIP — no separate stack.
-    struct mmipal_init_args ipal_args = MMIPAL_INIT_ARGS_DEFAULT;
-    if (mmipal_init(&ipal_args) != MMIPAL_SUCCESS) {
-        LOG_ERROR("HaLow: mmipal_init failed");
-        return false;
-    }
-
     if (HALOW_SSID[0] == '\0') {
         LOG_INFO("HaLow: no SSID configured, chip will idle (set -DHALOW_SSID=...)");
         return false;
@@ -133,8 +113,7 @@ bool HaLowInterface::init()
     memcpy(sta_args.passphrase, HALOW_PASSPHRASE, sta_args.passphrase_len);
     sta_args.security_type = (sta_args.passphrase_len > 0) ? MMWLAN_SAE : MMWLAN_OPEN;
 
-    s_instance = this;
-    mmwlan_register_link_state_cb(halow_link_state_cb, NULL);
+    mmwlan_register_link_state_cb(linkStateTrampoline, this);
     if (mmwlan_register_rx_cb(rxTrampoline, this) != MMWLAN_SUCCESS) {
         LOG_ERROR("HaLow: register_rx_cb failed");
         return false;
@@ -146,9 +125,8 @@ bool HaLowInterface::init()
         return false;
     }
 
-    // From here on out, HaLow is the radio. send() encodes packets as 802.3
-    // frames addressed to broadcast MAC with EtherType 0x88B5; the AP relays
-    // them to all associated STAs (Phase 3 closes the AP-less gap).
+    // From here on out, HaLow is the radio. The AP relays raw 802.3 frames to
+    // associated STAs; IP is intentionally not initialized.
     return true;
 #else
     LOG_WARN("HaLow: built without USE_MM_IOT_ESP32, transport is a stub");
@@ -178,9 +156,13 @@ ErrorCode HaLowInterface::send(meshtastic_MeshPacket *p)
     }
 
 #ifdef USE_MM_IOT_ESP32
+    if (!linkUp) {
+        packetPool.release(p);
+        return ERRNO_DISABLED;
+    }
+
     // beginSending() serializes the MeshPacket into radioBuffer (PacketHeader
-    // + payload). We then prepend a 14-byte 802.3 header so mmwlan can wrap
-    // it as an 802.11 data frame and ship it through the AP.
+    // + payload). We then prepend a 14-byte 802.3 header for mmwlan.
     size_t encoded = beginSending(p);
     if (encoded == 0) {
         packetPool.release(p);
@@ -203,7 +185,20 @@ ErrorCode HaLowInterface::send(meshtastic_MeshPacket *p)
     txbuf[13] = (uint8_t)(ETHERTYPE_MESHTASTIC_HALOW & 0xFF);
     memcpy(txbuf + sizeof(HaLowEthFrameHeader), &radioBuffer, encoded);
 
-    enum mmwlan_status st = mmwlan_tx(txbuf, sizeof(HaLowEthFrameHeader) + encoded);
+    enum mmwlan_status st = mmwlan_tx_wait_until_ready(0);
+    if (st == MMWLAN_SUCCESS) {
+        struct mmwlan_tx_metadata metadata = MMWLAN_TX_METADATA_INIT;
+        struct mmpkt *pkt = mmwlan_alloc_mmpkt_for_tx(sizeof(HaLowEthFrameHeader) + encoded, metadata.tid);
+        if (pkt) {
+            struct mmpktview *pktview = mmpkt_open(pkt);
+            mmpkt_append_data(pktview, txbuf, sizeof(HaLowEthFrameHeader) + encoded);
+            mmpkt_close(&pktview);
+            st = mmwlan_tx_pkt(pkt, &metadata);
+        } else {
+            st = MMWLAN_NO_MEM;
+        }
+    }
+
     packetPool.release(p);
     sendingPacket = NULL;
     return (st == MMWLAN_SUCCESS) ? ERRNO_OK : ERRNO_UNKNOWN;
@@ -216,7 +211,7 @@ ErrorCode HaLowInterface::send(meshtastic_MeshPacket *p)
 meshtastic_QueueStatus HaLowInterface::getQueueStatus()
 {
     meshtastic_QueueStatus qs = meshtastic_QueueStatus_init_zero;
-    qs.free = 16;
+    qs.free = linkUp ? 16 : 0;
     qs.maxlen = 16;
     return qs;
 }

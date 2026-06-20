@@ -4,20 +4,23 @@
 #include "RadioInterface.h"
 #include "concurrency/OSThread.h"
 
+#ifdef USE_MM_IOT_ESP32
+extern "C" {
+#include "mmwlan.h"
+}
+#endif
+
 /**
  * HaLow (802.11ah) transport. Derives directly from RadioInterface because
  * RadioLib has no MM6108 driver and the model doesn't fit — mmwlan is a
  * frame-level API, not a register-level SPI interface.
  *
- * Frames go out as Ethernet payloads (broadcast MAC, EtherType 0x88B5) carrying
+ * Frames go out as 802.3 payloads (broadcast MAC, EtherType 0x88B5) carrying
  * the same RadioBuffer the LoRa path builds via beginSending(), so the
  * Meshtastic wire format is unchanged.
  *
- * True peer-broadcast requires MAC-layer support that mm-iot-esp32 does not
- * currently expose (no 802.11s / IBSS / monitor mode). Until that gap closes,
- * the send path is a no-op and packets must travel over UDP multicast via the
- * existing UdpMulticastHandler path (HaLow operating as a STA against an AP).
- * See the plan for the SDK-side workstream.
+ * This mode associates with a HaLow AP, but does not initialize IP. The AP is
+ * only the 802.11ah distribution system for raw Meshtastic frames.
  */
 class HaLowInterface : public RadioInterface, private concurrency::OSThread
 {
@@ -38,12 +41,15 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
     int32_t runOnce() override;
 
   private:
+    volatile bool linkUp = false;
+
     void onFrameReceived(const uint8_t *payload, size_t payload_len, int8_t rssi);
 
 #ifdef USE_MM_IOT_ESP32
     // Trampoline registered with mmwlan_register_rx_cb. The callback hands us
     // the 802.3 header and payload separately.
     static void rxTrampoline(uint8_t *header, unsigned header_len, uint8_t *payload, unsigned payload_len, void *arg);
+    static void linkStateTrampoline(enum mmwlan_link_state link_state, void *arg);
 #endif
 
     // Approximate bytes-per-millisecond at the configured channel width / MCS.
