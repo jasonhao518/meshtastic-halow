@@ -62,15 +62,22 @@ def _run(cmd, **kwargs):
     subprocess.check_call(cmd, **kwargs)
 
 
+def _toolchain_program(suffix):
+    ar = env.subst("$AR")
+    prefix = re.sub(r"ar$", "", ar)
+    return prefix + suffix
+
+
 def _build_mbin_object(target, source, env):
     source_path = str(source[0])
     target_path = str(target[0])
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
     if source_path.endswith(".o"):
         _run(["cp", source_path, target_path])
         return
 
     prefix = env["MM_PREFIX"]
-    objcopy = env.subst("$OBJCOPY")
+    objcopy = _toolchain_program("objcopy")
     _run([
         objcopy,
         "-I",
@@ -103,7 +110,10 @@ def _build_archive(target, source, env):
     script.extend("ADDMOD " + obj for obj in objects)
     script.extend(["SAVE", "END"])
     print(f"Creating {target_path}")
-    subprocess.check_call([ar, "-M"], input=("\n".join(script) + "\n").encode())
+    proc = subprocess.Popen([ar, "-M"], stdin=subprocess.PIPE)
+    proc.communicate(("\n".join(script) + "\n").encode())
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, [ar, "-M"])
     if ranlib:
         _run([ranlib, target_path])
 
@@ -146,12 +156,25 @@ build_env.Append(
     CPPDEFINES=[
         "CONFIG_IEEE80211AH",
         "MM_IOT",
+        ("CONFIG_MBEDTLS_SHA512_C", 1),
+        ("CONFIG_MMHAL_CHIP_TYPE_MM6108", 1),
+        ("CONFIG_MMHAL_CHIP_TYPE_MM8108", 0),
+        ("CONFIG_MM_EXPERIMENTAL_MESH", 1),
+        ("CONFIG_MM_EXPERIMENTAL_MESH_OP_CLASS", 1),
+        ("CONFIG_MM_EXPERIMENTAL_MESH_CHAN", 27),
+        ("CONFIG_MM_EXPERIMENTAL_MESH_PRI_1MHZ_LOC", 0),
+        ("CONFIG_MM_EXPERIMENTAL_MESH_PREQ_INTERVAL_MS", 4000),
         ("IP_STACK", "lwip"),
         ("MMIPAL_IPV4_ENABLED", 1),
         ("MMIPAL_IPV6_ENABLED", 0),
+        ("MESH_PREQ_INTERVAL_MS", 4000),
+        ("MMPKTMEM_TX_POOL_N_BLOCKS", 20),
+        ("MMPKTMEM_RX_POOL_N_BLOCKS", 23),
         ("ON_DEMAND_TIMERS_ENABLED", 0),
     ],
     CCFLAGS=[
+        "-include",
+        "mm_mbedtls_config.h",
         "-Wno-c++-compat",
         "-Wno-unused-but-set-variable",
         "-Wno-unused-function",
@@ -196,4 +219,6 @@ bcf_obj = env.Command(
 )
 
 env.Prepend(CPPPATH=include_dirs)
-env.Append(LINKFLAGS=[archive_node, fw_obj, bcf_obj])
+env.Prepend(LIBPATH=[OUT_DIR])
+env.Append(LIBS=["mm_iot_esp32"], LINKFLAGS=[str(fw_obj[0]), str(bcf_obj[0])])
+env.Depends(env.subst("$BUILD_DIR/${PROGNAME}.elf"), [archive_node, fw_obj, bcf_obj])

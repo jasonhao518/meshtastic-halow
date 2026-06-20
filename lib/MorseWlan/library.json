@@ -7,7 +7,7 @@
   "build": {
     "srcDir": "src",
     "srcFilter": ["-<*>"],
-    "includeDir": "include",
+    "includeDir": "../../third_party/mm-iot-esp32/framework/morselib/include",
     "libArchive": false,
     "extraScript": "extra_script.py"
   }
