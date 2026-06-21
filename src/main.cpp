@@ -45,6 +45,13 @@
 #include "platform/nrf54/ZephyrBluetooth.h"
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
+#if defined(USE_HALOW_RADIO) && defined(USE_MM_IOT_ZEPHYR)
+extern "C" {
+#include "mmhal_wlan.h"
+#include "mmregdb.h"
+#include "mmwlan.h"
+}
+#endif
 LOG_MODULE_REGISTER(nrf54_setup_trace, LOG_LEVEL_INF);
 #define NRF54_SETUP_LOG(...)                                                                                                      \
     do {                                                                                                                          \
@@ -327,6 +334,74 @@ void printInfo()
     LOG_INFO("S:B:%d,%s,%s,%s", HW_VENDOR, optstr(APP_VERSION), optstr(APP_ENV), optstr(APP_REPO));
 #endif
 }
+
+#if defined(ARCH_NRF54) && defined(USE_HALOW_RADIO) && defined(USE_MM_IOT_ZEPHYR)
+static bool nrf54MorseEarlyBooted = false;
+
+static void nrf54ProbeMorseHalow()
+{
+    if (nrf54MorseEarlyBooted) {
+        NRF54_SETUP_PRINTK("H:already_booted\n");
+        return;
+    }
+
+    NRF54_SETUP_PRINTK("H0:mmhal_wlan_init\n");
+    mmhal_wlan_init();
+
+    NRF54_SETUP_PRINTK("H1:mmwlan_init\n");
+    mmwlan_init();
+
+    const struct mmwlan_s1g_channel_list *channelList =
+        mmwlan_lookup_regulatory_domain(get_regulatory_db(), CONFIG_WIFI_MORSE_REGION);
+    if (!channelList) {
+        NRF54_SETUP_PRINTK("HERR:regdom %s\n", CONFIG_WIFI_MORSE_REGION);
+        return;
+    }
+
+    NRF54_SETUP_PRINTK("H2:set_channel_list %s\n", CONFIG_WIFI_MORSE_REGION);
+    enum mmwlan_status status = mmwlan_set_channel_list(channelList);
+    if (status != MMWLAN_SUCCESS) {
+        NRF54_SETUP_PRINTK("HERR:set_channel_list %d\n", (int)status);
+        return;
+    }
+
+    struct mmwlan_boot_args bootArgs = MMWLAN_BOOT_ARGS_INIT;
+    NRF54_SETUP_PRINTK("H3:mmwlan_boot\n");
+    status = mmwlan_boot(&bootArgs);
+    if (status != MMWLAN_SUCCESS) {
+        NRF54_SETUP_PRINTK("HERR:mmwlan_boot %d\n", (int)status);
+        return;
+    }
+
+    nrf54MorseEarlyBooted = true;
+    NRF54_SETUP_PRINTK("H4:booted\n");
+
+    status = mmwlan_set_power_save_mode(MMWLAN_PS_DISABLED);
+    if (status != MMWLAN_SUCCESS) {
+        NRF54_SETUP_PRINTK("HWARN:ps_disable %d\n", (int)status);
+    }
+
+    struct mmwlan_version version = {};
+    uint8_t mac[MMWLAN_MAC_ADDR_LEN] = {};
+    struct mmwlan_bcf_metadata bcf = {};
+
+    status = mmwlan_get_version(&version);
+    NRF54_SETUP_PRINTK("H5:version status=%d fw=%s lib=%s chip=%s id=0x%08lx\n", (int)status,
+                       version.morse_fw_version[0] ? version.morse_fw_version : "n/a",
+                       version.morselib_version[0] ? version.morselib_version : "n/a",
+                       version.morse_chip_id_string[0] ? version.morse_chip_id_string : "n/a",
+                       (unsigned long)version.morse_chip_id);
+
+    status = mmwlan_get_mac_addr(mac);
+    NRF54_SETUP_PRINTK("H6:mac status=%d serial=%02x%02x%02x%02x%02x%02x\n", (int)status, mac[0], mac[1], mac[2], mac[3],
+                       mac[4], mac[5]);
+
+    status = mmwlan_get_bcf_metadata(&bcf);
+    NRF54_SETUP_PRINTK("H7:bcf status=%d board=%s build=%s\n", (int)status, bcf.board_desc[0] ? bcf.board_desc : "n/a",
+                       bcf.build_version[0] ? bcf.build_version : "n/a");
+}
+#endif
+
 #ifndef PIO_UNIT_TESTING
 void setup()
 {
@@ -735,6 +810,10 @@ void setup()
     printInfo();
 #if defined(BUILD_EPOCH) && !defined(ARCH_NRF54)
     LOG_INFO("Build timestamp: %ld", BUILD_EPOCH);
+#endif
+
+#if defined(ARCH_NRF54) && defined(USE_HALOW_RADIO) && defined(USE_MM_IOT_ZEPHYR)
+    nrf54ProbeMorseHalow();
 #endif
 
 #ifdef ARCH_ESP32

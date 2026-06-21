@@ -269,44 +269,56 @@ bool HaLowInterface::init()
     printf("HaLow: cleared pending Morse GPIO interrupts\n");
 #endif
 
-    LOG_INFO("HaLow: mmhal init");
+    struct mmwlan_version version = {};
+    bool morseAlreadyBooted = false;
 #ifdef USE_MM_IOT_ZEPHYR
-    HALOW_TRACE("HaLow: calling mmhal_wlan_init\n");
-    fflush(stdout);
-    mmhal_wlan_init();
-    HALOW_TRACE("HaLow: mmhal_wlan_init complete\n");
-#else
-    HALOW_TRACE("HaLow: calling mmhal_init\n");
-    fflush(stdout);
-    mmhal_init();
-    HALOW_TRACE("HaLow: mmhal_init complete\n");
+    if (mmwlan_get_version(&version) == MMWLAN_SUCCESS && version.morse_fw_version[0] != '\0') {
+        morseAlreadyBooted = true;
+        wlanReady = true;
+        HALOW_TRACE("HaLow: Morse already booted fw=%s lib=%s chip=%s id=0x%lx\n", version.morse_fw_version,
+                    version.morselib_version, version.morse_chip_id_string, (unsigned long)version.morse_chip_id);
+    }
 #endif
-    fflush(stdout);
 
-    LOG_INFO("HaLow: mmwlan_init()");
-    HALOW_TRACE("HaLow: calling mmwlan_init\n");
-    fflush(stdout);
-    mmwlan_init();
-    HALOW_TRACE("HaLow: mmwlan_init complete\n");
-    fflush(stdout);
+    if (!morseAlreadyBooted) {
+        LOG_INFO("HaLow: mmhal init");
+#ifdef USE_MM_IOT_ZEPHYR
+        HALOW_TRACE("HaLow: calling mmhal_wlan_init\n");
+        fflush(stdout);
+        mmhal_wlan_init();
+        HALOW_TRACE("HaLow: mmhal_wlan_init complete\n");
+#else
+        HALOW_TRACE("HaLow: calling mmhal_init\n");
+        fflush(stdout);
+        mmhal_init();
+        HALOW_TRACE("HaLow: mmhal_init complete\n");
+#endif
+        fflush(stdout);
 
-    if (!applyChannelList()) {
-        return false;
+        LOG_INFO("HaLow: mmwlan_init()");
+        HALOW_TRACE("HaLow: calling mmwlan_init\n");
+        fflush(stdout);
+        mmwlan_init();
+        HALOW_TRACE("HaLow: mmwlan_init complete\n");
+        fflush(stdout);
+
+        if (!applyChannelList()) {
+            return false;
+        }
+
+        struct mmwlan_boot_args boot_args = MMWLAN_BOOT_ARGS_INIT;
+        HALOW_TRACE("HaLow: calling mmwlan_boot\n");
+        fflush(stdout);
+        enum mmwlan_status st = mmwlan_boot(&boot_args);
+        if (st != MMWLAN_SUCCESS) {
+            LOG_ERROR("HaLow: mmwlan_boot failed (%d) — firmware load or SPI wiring", (int)st);
+            HALOW_TRACE("HaLow: mmwlan_boot failed (%d)\n", (int)st);
+            return false;
+        }
+        HALOW_TRACE("HaLow: mmwlan_boot complete\n");
+        wlanReady = true;
     }
 
-    struct mmwlan_boot_args boot_args = MMWLAN_BOOT_ARGS_INIT;
-    HALOW_TRACE("HaLow: calling mmwlan_boot\n");
-    fflush(stdout);
-    enum mmwlan_status st = mmwlan_boot(&boot_args);
-    if (st != MMWLAN_SUCCESS) {
-        LOG_ERROR("HaLow: mmwlan_boot failed (%d) — firmware load or SPI wiring", (int)st);
-        HALOW_TRACE("HaLow: mmwlan_boot failed (%d)\n", (int)st);
-        return false;
-    }
-    HALOW_TRACE("HaLow: mmwlan_boot complete\n");
-    wlanReady = true;
-
-    struct mmwlan_version version;
     if (mmwlan_get_version(&version) == MMWLAN_SUCCESS) {
         LOG_INFO("HaLow: chip 0x%lx, fw %s, lib %s", (unsigned long)version.morse_chip_id, version.morse_fw_version,
                  version.morselib_version);
