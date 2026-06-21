@@ -23,6 +23,7 @@ LOG_MODULE_REGISTER(nrf54_ble, LOG_LEVEL_INF);
 static struct bt_conn *currentConn;
 static bool btReady;
 static bool advertising;
+static bool appReady;
 static uint8_t fromRadioValue[meshtastic_FromRadio_size];
 static uint16_t fromRadioValueLen;
 static uint32_t fromNumValue;
@@ -56,7 +57,7 @@ static ssize_t readFromRadio(struct bt_conn *conn, const struct bt_gatt_attr *at
 {
     (void)conn;
     const uint8_t *value = fromRadioValue;
-    if (phoneApi) {
+    if (appReady && phoneApi) {
         fromRadioValueLen = phoneApi->getFromRadio(fromRadioValue);
     } else {
         fromRadioValueLen = 0;
@@ -84,6 +85,10 @@ static ssize_t writeToRadio(struct bt_conn *conn, const struct bt_gatt_attr *att
     (void)flags;
     if (offset != 0 || len > MAX_TO_FROM_RADIO_SIZE) {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+    }
+    LOG_INF("BLE ToRadio write len=%u appReady=%u phoneApi=%p", len, appReady, phoneApi);
+    if (!appReady) {
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
     }
     if (phoneApi) {
         phoneApi->handleToRadio(static_cast<const uint8_t *>(buf), len);
@@ -149,13 +154,15 @@ static void connected(struct bt_conn *conn, uint8_t err)
         return;
     }
     currentConn = bt_conn_ref(conn);
-    if (!phoneApi) {
+    LOG_INF("BLE connected appReady=%u", appReady);
+    if (appReady && !phoneApi) {
         phoneApi = new ZephyrBluetoothPhoneAPI();
     }
-    LOG_INF("BLE connected");
-    meshtastic::BluetoothStatus status(meshtastic::BluetoothStatus::ConnectionState::CONNECTED);
-    bluetoothStatus->updateStatus(&status);
-    powerFSM.trigger(EVENT_BLUETOOTH_PAIR);
+    if (appReady) {
+        meshtastic::BluetoothStatus status(meshtastic::BluetoothStatus::ConnectionState::CONNECTED);
+        bluetoothStatus->updateStatus(&status);
+        powerFSM.trigger(EVENT_BLUETOOTH_PAIR);
+    }
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
@@ -164,12 +171,14 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
         bt_conn_unref(currentConn);
         currentConn = nullptr;
     }
-    if (phoneApi) {
+    if (appReady && phoneApi) {
         phoneApi->close();
     }
-    LOG_INF("BLE disconnected reason=%u", reason);
-    meshtastic::BluetoothStatus status(meshtastic::BluetoothStatus::ConnectionState::DISCONNECTED);
-    bluetoothStatus->updateStatus(&status);
+    LOG_INF("BLE disconnected reason=%u appReady=%u", reason, appReady);
+    if (appReady) {
+        meshtastic::BluetoothStatus status(meshtastic::BluetoothStatus::ConnectionState::DISCONNECTED);
+        bluetoothStatus->updateStatus(&status);
+    }
     advertising = false;
     nrf54BluetoothSetEnabled(true);
 }
@@ -181,9 +190,12 @@ BT_CONN_CB_DEFINE(connCallbacks) = {
 
 void nrf54BluetoothSetEnabled(bool enable)
 {
+    LOG_INF("BLE set enabled=%u ready=%u advertising=%u connected=%u appReady=%u", enable, btReady, advertising,
+            currentConn != nullptr, appReady);
     if (!enable) {
         if (advertising) {
-            bt_le_adv_stop();
+            int err = bt_le_adv_stop();
+            LOG_INF("BLE advertising stop err=%d", err);
             advertising = false;
         }
         return;
@@ -203,12 +215,12 @@ void nrf54BluetoothSetEnabled(bool enable)
         LOG_INF("Bluetooth initialized");
     }
 
-    if (!phoneApi) {
+    if (appReady && !phoneApi) {
         phoneApi = new ZephyrBluetoothPhoneAPI();
     }
 
     if (!advertising && !currentConn) {
-        const char *name = getDeviceName();
+        const char *name = appReady ? getDeviceName() : "Meshtastic";
         struct bt_data sd[] = {
             BT_DATA(BT_DATA_NAME_COMPLETE, name, static_cast<uint8_t>(strlen(name))),
         };
@@ -219,6 +231,32 @@ void nrf54BluetoothSetEnabled(bool enable)
         }
         advertising = true;
         LOG_INF("BLE advertising as %s", name);
+    }
+}
+
+void nrf54BluetoothMarkAppReady()
+{
+    if (appReady) {
+        LOG_INF("BLE app already ready; connected=%u advertising=%u", currentConn != nullptr, advertising);
+        return;
+    }
+
+    appReady = true;
+    LOG_INF("BLE app ready; connected=%u advertising=%u", currentConn != nullptr, advertising);
+    if (!phoneApi) {
+        phoneApi = new ZephyrBluetoothPhoneAPI();
+    }
+    if (currentConn) {
+        meshtastic::BluetoothStatus status(meshtastic::BluetoothStatus::ConnectionState::CONNECTED);
+        bluetoothStatus->updateStatus(&status);
+        powerFSM.trigger(EVENT_BLUETOOTH_PAIR);
+    } else {
+        if (advertising) {
+            int err = bt_le_adv_stop();
+            LOG_INF("BLE advertising restart for Meshtastic name err=%d", err);
+            advertising = false;
+        }
+        nrf54BluetoothSetEnabled(true);
     }
 }
 
@@ -235,5 +273,7 @@ int nrf54BluetoothGetRssi()
 void nrf54BluetoothUpdateBatteryLevel(uint8_t level)
 {
     batteryLevel = level;
-    bt_gatt_notify(nullptr, &batterySvc.attrs[2], &batteryLevel, sizeof(batteryLevel));
+    if (btReady) {
+        bt_gatt_notify(nullptr, &batterySvc.attrs[2], &batteryLevel, sizeof(batteryLevel));
+    }
 }

@@ -39,6 +39,14 @@
 #include "target_specific.h"
 #include <memory>
 #include <utility>
+#ifdef ARCH_NRF54
+#include "platform/nrf54/ZephyrBluetooth.h"
+#include <zephyr/logging/log.h>
+LOG_MODULE_REGISTER(nrf54_setup_trace, LOG_LEVEL_INF);
+#define NRF54_SETUP_LOG(...) LOG_INF(__VA_ARGS__)
+#else
+#define NRF54_SETUP_LOG(...)
+#endif
 #if HAS_SCREEN
 #include "MessageStore.h"
 #endif
@@ -307,9 +315,11 @@ void printInfo()
 #ifndef PIO_UNIT_TESTING
 void setup()
 {
+    NRF54_SETUP_LOG("setup: begin");
 
     // initialize power HAL layer as early as possible
     powerHAL_init();
+    NRF54_SETUP_LOG("setup: powerHAL_init done");
 
 #ifdef LED_POWER
     pinMode(LED_POWER, OUTPUT);
@@ -319,9 +329,11 @@ void setup()
     // prevent booting if device is in power failure mode
     // boot sequence will follow when battery level raises to safe mode
     waitUntilPowerLevelSafe();
+    NRF54_SETUP_LOG("setup: power level safe");
 
     // Defined in variant.cpp for early init code
     earlyInitVariant();
+    NRF54_SETUP_LOG("setup: earlyInitVariant done");
 
 #if defined(PIN_POWER_EN)
     pinMode(PIN_POWER_EN, OUTPUT);
@@ -362,6 +374,7 @@ void setup()
 
 #ifdef DEBUG_PORT
     consoleInit(); // Set serial baud rate and init our mesh console
+    NRF54_SETUP_LOG("setup: consoleInit done");
 #endif
 
 #ifdef UNPHONE
@@ -456,10 +469,13 @@ void setup()
     delay(PERIPHERAL_WARMUP_MS);
 #endif
     initSPI();
+    NRF54_SETUP_LOG("setup: initSPI done");
 
     OSThread::setup();
+    NRF54_SETUP_LOG("setup: OSThread setup done");
 
     fsInit();
+    NRF54_SETUP_LOG("setup: fsInit done");
 
 #if !MESHTASTIC_EXCLUDE_I2C
 #if defined(I2C_SDA1) && defined(ARCH_RP2040)
@@ -518,6 +534,7 @@ void setup()
     power->setStatusHandler(powerStatus);
     powerStatus->observe(&power->newStatus);
     power->setup(); // Must be after status handler is installed, so that handler gets notified of the initial configuration
+    NRF54_SETUP_LOG("setup: power setup done");
 
 #if !MESHTASTIC_EXCLUDE_I2C
     // We need to scan here to decide if we have a screen for nodeDB.init() and because power has been applied to
@@ -704,9 +721,11 @@ void setup()
     // We do this as early as possible because this loads preferences from flash
     // but we need to do this after main cpu init (esp32setup), because we need the random seed set
     nodeDB = new NodeDB;
+    NRF54_SETUP_LOG("setup: NodeDB created");
 
     // Initialize transmit history to persist broadcast throttle timers across reboots
     TransmitHistory::getInstance()->loadFromDisk();
+    NRF54_SETUP_LOG("setup: transmit history loaded");
 #if HAS_TFT
     if (config.display.displaymode == meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
         tftSetup();
@@ -714,6 +733,7 @@ void setup()
 #endif
 
     router = new ReliableRouter();
+    NRF54_SETUP_LOG("setup: router created");
 
     // only play start melody when role is not tracker or sensor
     if (config.power.is_power_saving == true &&
@@ -901,7 +921,9 @@ void setup()
 #endif
 #endif
     service = new MeshService();
+    NRF54_SETUP_LOG("setup: MeshService created");
     service->init();
+    NRF54_SETUP_LOG("setup: MeshService init done");
 
     // Set osk_found for trackball/encoder devices BEFORE setupModules so CannedMessageModule can detect it
 #if defined(HAS_TRACKBALL) || (defined(INPUTDRIVER_ENCODER_TYPE) && INPUTDRIVER_ENCODER_TYPE == 2)
@@ -912,6 +934,15 @@ void setup()
 
     // Now that the mesh service is created, create any modules
     setupModules();
+    NRF54_SETUP_LOG("setup: modules setup done");
+#ifdef ARCH_NRF54
+    PowerFSM_setup();
+    NRF54_SETUP_LOG("setup: PowerFSM setup done before BLE API ready");
+    powerFSMthread = new PowerFSMThread();
+    NRF54_SETUP_LOG("setup: PowerFSM thread created before BLE API ready");
+    nrf54BluetoothMarkAppReady();
+    NRF54_SETUP_LOG("setup: BLE Meshtastic API ready");
+#endif
 
 #if !MESHTASTIC_EXCLUDE_I2C
     // Inform modules about I2C devices
@@ -966,9 +997,12 @@ void setup()
 #endif
 #endif
 
+    NRF54_SETUP_LOG("setup: initLoRa begin");
     auto rIf = initLoRa();
+    NRF54_SETUP_LOG("setup: initLoRa done rIf=%p", rIf.get());
 
     lateInitVariant(); // Do board specific init (see extra_variants/README.md for documentation)
+    NRF54_SETUP_LOG("setup: lateInitVariant done");
 
 #if !MESHTASTIC_EXCLUDE_MQTT
     mqttInit();
@@ -1024,8 +1058,12 @@ void setup()
     }
 
     // This must be _after_ service.init because we need our preferences loaded from flash to have proper timeout values
+#ifndef ARCH_NRF54
     PowerFSM_setup(); // we will transition to ON in a couple of seconds, FIXME, only do this for cold boots, not waking from SDS
+    NRF54_SETUP_LOG("setup: PowerFSM setup done");
     powerFSMthread = new PowerFSMThread();
+    NRF54_SETUP_LOG("setup: PowerFSM thread created");
+#endif
 
 #if !HAS_TFT
     setCPUFast(false); // 80MHz is fine for our slow peripherals
@@ -1038,6 +1076,7 @@ void setup()
 
     // We manually run this to update the NodeStatus
     nodeDB->notifyObservers(true);
+    NRF54_SETUP_LOG("setup: complete");
 }
 
 #endif
