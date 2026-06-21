@@ -132,6 +132,15 @@ static inline uint32_t pgm_read_dword(const void *addr)
     return *reinterpret_cast<const uint32_t *>(addr);
 }
 
+static inline char *stpcpy(char *dest, const char *src)
+{
+    while ((*dest = *src) != '\0') {
+        dest++;
+        src++;
+    }
+    return dest;
+}
+
 static inline double radians(double deg)
 {
     return deg * (PI / 180.0);
