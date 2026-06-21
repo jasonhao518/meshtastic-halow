@@ -9,12 +9,15 @@ import shutil
 from pathlib import Path
 
 PROJECT_DIR = Path(env.subst("$PROJECT_DIR")).resolve()
+BUILD_DIR = Path(env.subst("$BUILD_DIR")).resolve()
 module_root = (PROJECT_DIR / "third_party" / "mm-iot-zephyr").resolve()
 fallback_roots = [
     Path(os.environ["MMIOT_ZEPHYR_ROOT"]).expanduser().resolve() if "MMIOT_ZEPHYR_ROOT" in os.environ else None,
     (PROJECT_DIR / ".." / "mm-iot-zephyr").resolve(),
     (PROJECT_DIR / ".." / "edge-device-nrf54" / "modules" / "mm-iot-zephyr").resolve(),
 ]
+
+(BUILD_DIR / "zephyr").mkdir(parents=True, exist_ok=True)
 
 
 def is_complete_morse_module(path):
