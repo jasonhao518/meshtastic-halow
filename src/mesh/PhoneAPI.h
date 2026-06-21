@@ -189,7 +189,16 @@ class PhoneAPI
     /**
      * Subclasses can use this as a hook to provide custom notifications for their transport (i.e. bluetooth notifies)
      */
-    virtual void onNowHasData(uint32_t fromRadioNum) {}
+    virtual void onNowHasData(uint32_t fromRadioNum)
+    {
+        if (fromRadioNum > this->fromRadioNum)
+            this->fromRadioNum = fromRadioNum;
+    }
+
+    uint32_t getFromRadioNotifyNum(uint32_t requestedFromRadioNum) const
+    {
+        return requestedFromRadioNum != 0 ? requestedFromRadioNum : fromRadioNum + 1;
+    }
 
     /// Subclasses can use these lifecycle hooks for transport-specific behavior around config/steady-state
     /// (i.e. BLE connection params)

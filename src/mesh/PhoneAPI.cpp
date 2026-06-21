@@ -33,6 +33,18 @@
 #include "Throttle.h"
 #include <RTC.h>
 
+#ifdef ARCH_NRF54
+#include <zephyr/sys/printk.h>
+#define NRF54_PHONEAPI_LOG(...)                                                                                                      \
+    do {                                                                                                                             \
+        printk("nrf54_phoneapi: " __VA_ARGS__);                                                                                      \
+    } while (0)
+#else
+#define NRF54_PHONEAPI_LOG(...)                                                                                                      \
+    do {                                                                                                                             \
+    } while (0)
+#endif
+
 // Flag to indicate a heartbeat was received and we should send queue status
 bool heartbeatReceived = false;
 
@@ -50,6 +62,8 @@ PhoneAPI::~PhoneAPI()
 void PhoneAPI::handleStartConfig()
 {
     LOG_INFO("PhoneAPI start config nonce=%u state=%d connected=%u", config_nonce, state, isConnected());
+    NRF54_PHONEAPI_LOG("start config nonce=%u state=%d connected=%u nodes=%u\n", config_nonce, state, isConnected(),
+                       nodeDB ? nodeDB->getNumMeshNodes() : 0);
 
     // Must be before setting state (because state is how we know !connected)
     if (!isConnected()) {
@@ -68,6 +82,7 @@ void PhoneAPI::handleStartConfig()
         // If client only wants node info, jump directly to sending nodes
         state = STATE_SEND_OWN_NODEINFO;
         LOG_INFO("Client only wants node info, skipping other config");
+        NRF54_PHONEAPI_LOG("only nodes request\n");
     } else {
         state = STATE_SEND_MY_INFO;
     }
@@ -185,14 +200,17 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
 #ifdef ARCH_NRF54
             LOG_INFO("PhoneAPI ToRadio packet port=%u id=0x%x", toRadioScratch.packet.decoded.portnum, toRadioScratch.packet.id);
 #endif
+            NRF54_PHONEAPI_LOG("ToRadio packet port=%u id=0x%x\n", toRadioScratch.packet.decoded.portnum, toRadioScratch.packet.id);
             return handleToRadioPacket(toRadioScratch.packet);
         case meshtastic_ToRadio_want_config_id_tag:
             config_nonce = toRadioScratch.want_config_id;
             LOG_INFO("Client wants config, nonce=%u", config_nonce);
+            NRF54_PHONEAPI_LOG("want config nonce=%u\n", config_nonce);
             handleStartConfig();
             break;
         case meshtastic_ToRadio_disconnect_tag:
             LOG_INFO("Disconnect from phone");
+            NRF54_PHONEAPI_LOG("disconnect from phone\n");
             close();
             break;
         case meshtastic_ToRadio_xmodemPacket_tag:
@@ -221,6 +239,7 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
 #ifdef ARCH_NRF54
             LOG_INFO("PhoneAPI heartbeat nonce=%u", toRadioScratch.heartbeat.nonce);
 #endif
+            NRF54_PHONEAPI_LOG("heartbeat nonce=%u\n", toRadioScratch.heartbeat.nonce);
             // nonce==1 is a special "nodeinfo ping" trigger: force a fresh
             // NodeInfo broadcast on the 60-second shorterTimeout path so
             // peers can re-learn our public key after a reboot or
@@ -251,6 +270,7 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
         }
     } else {
         LOG_ERROR("Error: ignore malformed toradio len=%u", bufLength);
+        NRF54_PHONEAPI_LOG("malformed ToRadio len=%u\n", bufLength);
     }
 
     return false;
@@ -283,8 +303,10 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
         fromRadioScratch.which_payload_variant = meshtastic_FromRadio_queueStatus_tag;
         fromRadioScratch.queueStatus = router->getQueueStatus();
         heartbeatReceived = false;
+        fromRadioScratch.id = ++fromRadioNum;
         size_t numbytes = pb_encode_to_bytes(buf, meshtastic_FromRadio_size, &meshtastic_FromRadio_msg, &fromRadioScratch);
         LOG_INFO("FromRadio=STATE_SEND_QUEUE_STATUS, numbytes=%u", numbytes);
+        NRF54_PHONEAPI_LOG("FromRadio queue_status id=%u len=%u\n", fromRadioScratch.id, numbytes);
         return numbytes;
     }
 
@@ -292,6 +314,7 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
 #ifdef ARCH_NRF54
         LOG_INFO("FromRadio unavailable state=%d connected=%u", state, isConnected());
 #endif
+        NRF54_PHONEAPI_LOG("FromRadio unavailable state=%d connected=%u\n", state, isConnected());
         return 0;
     }
     // In case we send a FromRadio packet
@@ -309,6 +332,8 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
         fromRadioScratch.which_payload_variant = meshtastic_FromRadio_my_info_tag;
         strncpy(myNodeInfo.pio_env, optstr(APP_ENV), sizeof(myNodeInfo.pio_env));
         myNodeInfo.nodedb_count = static_cast<uint16_t>(nodeDB->getNumMeshNodes());
+        NRF54_PHONEAPI_LOG("send my_info node=0x%x nodes=%u pio=%s\n", myNodeInfo.my_node_num, myNodeInfo.nodedb_count,
+                           myNodeInfo.pio_env);
         fromRadioScratch.my_info = myNodeInfo;
         state = STATE_SEND_UIDATA;
 
@@ -335,6 +360,7 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
             }
             fromRadioScratch.which_payload_variant = meshtastic_FromRadio_node_info_tag;
             fromRadioScratch.node_info = info;
+            NRF54_PHONEAPI_LOG("send own node_info num=0x%x user=%s readIndex=%u\n", info.num, info.user.id, readIndex);
             // Should allow us to resume sending NodeInfo in STATE_SEND_OTHER_NODEINFOS
             {
                 concurrency::LockGuard guard(&nodeInfoMutex);
@@ -538,6 +564,8 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
         if (readIndex == 2) { //  readIndex==2 will be true for the first non-us node
             LOG_INFO("Start sending nodeinfos millis=%u", millis());
         }
+        NRF54_PHONEAPI_LOG("other nodeinfos begin readIndex=%u queued=%u total=%u\n", readIndex,
+                           (unsigned)nodeInfoQueue.size(), nodeDB->getNumMeshNodes());
 
         meshtastic_NodeInfo infoToSend = {};
         {
@@ -558,9 +586,12 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
 
             fromRadioScratch.which_payload_variant = meshtastic_FromRadio_node_info_tag;
             fromRadioScratch.node_info = infoToSend;
+            NRF54_PHONEAPI_LOG("send other node_info num=0x%x user=%s readIndex=%u queued=%u\n", infoToSend.num,
+                               infoToSend.user.id, readIndex, (unsigned)nodeInfoQueue.size());
             prefetchNodeInfos();
         } else {
             LOG_DEBUG("Done sending %d of %d nodeinfos millis=%u", readIndex, nodeDB->getNumMeshNodes(), millis());
+            NRF54_PHONEAPI_LOG("done nodeinfos readIndex=%u total=%u\n", readIndex, nodeDB->getNumMeshNodes());
             nodeInfoMutex.lock();
             nodeInfoQueue.clear();
             nodeInfoMutex.unlock();
@@ -640,24 +671,30 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
     // Do we have a message from the mesh?
     if (fromRadioScratch.which_payload_variant != 0) {
         // Encapsulate as a FromRadio packet
+        fromRadioScratch.id = ++fromRadioNum;
         size_t numbytes = pb_encode_to_bytes(buf, meshtastic_FromRadio_size, &meshtastic_FromRadio_msg, &fromRadioScratch);
 
         // VERY IMPORTANT to not print debug messages while writing to fromRadioScratch - because we use that same buffer
         // for logging (when we are encapsulating with protobufs)
 #ifdef ARCH_NRF54
-        LOG_INFO("FromRadio encoded state=%d variant=%u len=%u nextFromNum=%u", state, fromRadioScratch.which_payload_variant,
-                 numbytes, fromRadioNum);
+        LOG_INFO("FromRadio encoded state=%d variant=%u id=%u len=%u", state, fromRadioScratch.which_payload_variant,
+                 fromRadioScratch.id, numbytes);
 #endif
+        NRF54_PHONEAPI_LOG("FromRadio encoded state=%d variant=%u id=%u len=%u\n", state,
+                           fromRadioScratch.which_payload_variant, fromRadioScratch.id, numbytes);
         return numbytes;
     }
 
     LOG_INFO("No FromRadio packet available state=%d", state);
+    NRF54_PHONEAPI_LOG("No FromRadio state=%d\n", state);
     return 0;
 }
 
 void PhoneAPI::sendConfigComplete()
 {
     LOG_INFO("Config Send Complete millis=%u", millis());
+    NRF54_PHONEAPI_LOG("config complete nonce=%u nodes=%u replay=%u\n", config_nonce, nodeDB->getNumMeshNodes(),
+                       config_nonce != SPECIAL_NONCE_ONLY_CONFIG);
     const bool shouldReplaySatellites = (config_nonce != SPECIAL_NONCE_ONLY_CONFIG);
     // The phone sees config_complete_id first (treats sync as done), then the cached
     // satellite-DB packets (positions / telemetry / environment / status) trickle in
@@ -734,6 +771,8 @@ void PhoneAPI::prefetchNodeInfos()
             if (readIndex == 2 || readIndex % 20 == 0) {
                 LOG_DEBUG("nodeinfo: %d/%d", readIndex, nodeDB->getNumMeshNodes());
             }
+            NRF54_PHONEAPI_LOG("prefetch node_info num=0x%x user=%s readIndex=%u queued=%u\n", info.num, info.user.id,
+                               readIndex, (unsigned)nodeInfoQueue.size());
             added = true;
         }
     }

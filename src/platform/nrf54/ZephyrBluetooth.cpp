@@ -165,9 +165,10 @@ void ZephyrBluetoothPhoneAPI::onConnectionChanged(bool connected)
 
 void ZephyrBluetoothPhoneAPI::onNowHasData(uint32_t fromRadioNum)
 {
-    fromNumValue = fromRadioNum;
+    PhoneAPI::onNowHasData(fromRadioNum);
+    fromNumValue = getFromRadioNotifyNum(fromRadioNum);
     int err = bt_gatt_notify(nullptr, &meshtasticSvc.attrs[6], &fromNumValue, sizeof(fromNumValue));
-    LOG_INF("BLE FromNum notify value=%u err=%d", fromNumValue, err);
+    LOG_INF("BLE FromNum notify requested=%u value=%u err=%d", fromRadioNum, fromNumValue, err);
 }
 
 static const struct bt_data ad[] = {
