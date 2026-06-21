@@ -44,10 +44,13 @@
 #ifdef ARCH_NRF54
 #include "platform/nrf54/ZephyrBluetooth.h"
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/printk.h>
 LOG_MODULE_REGISTER(nrf54_setup_trace, LOG_LEVEL_INF);
 #define NRF54_SETUP_LOG(...) LOG_INF(__VA_ARGS__)
+#define NRF54_SETUP_PRINTK(...) printk(__VA_ARGS__)
 #else
 #define NRF54_SETUP_LOG(...)
+#define NRF54_SETUP_PRINTK(...)
 #endif
 #if HAS_SCREEN
 #include "MessageStore.h"
@@ -314,7 +317,11 @@ void waitUntilPowerLevelSafe()
  */
 void printInfo()
 {
+#ifdef ARCH_NRF54
+    LOG_INF("S:B:%d,%s,%s,%s", HW_VENDOR, optstr(APP_VERSION), optstr(APP_ENV), optstr(APP_REPO));
+#else
     LOG_INFO("S:B:%d,%s,%s,%s", HW_VENDOR, optstr(APP_VERSION), optstr(APP_ENV), optstr(APP_REPO));
+#endif
 }
 #ifndef PIO_UNIT_TESTING
 void setup()
@@ -542,6 +549,7 @@ void setup()
     powerStatus->observe(&power->newStatus);
     power->setup(); // Must be after status handler is installed, so that handler gets notified of the initial configuration
     NRF54_SETUP_LOG("setup: power setup done");
+    NRF54_SETUP_PRINTK("NRF54 setup: after power setup\n");
 
 #if !MESHTASTIC_EXCLUDE_I2C
     // We need to scan here to decide if we have a screen for nodeDB.init() and because power has been applied to
@@ -701,6 +709,9 @@ void setup()
     scannerToSensorsMap(i2cScanner, ScanI2C::DeviceType::MLX90614, meshtastic_TelemetrySensorType_MLX90614);
     scannerToSensorsMap(i2cScanner, ScanI2C::DeviceType::ICM20948, meshtastic_TelemetrySensorType_ICM20948);
     scannerToSensorsMap(i2cScanner, ScanI2C::DeviceType::MAX30102, meshtastic_TelemetrySensorType_MAX30102);
+#else
+    NRF54_SETUP_LOG("setup: I2C scan skipped");
+    NRF54_SETUP_PRINTK("NRF54 setup: I2C scan skipped\n");
 #endif
 
 #ifdef HAS_SDCARD
@@ -708,7 +719,11 @@ void setup()
 #endif
 
     // Hello
+    NRF54_SETUP_LOG("setup: printInfo begin");
+    NRF54_SETUP_PRINTK("NRF54 setup: printInfo begin\n");
     printInfo();
+    NRF54_SETUP_LOG("setup: printInfo done");
+    NRF54_SETUP_PRINTK("NRF54 setup: printInfo done\n");
 #ifdef BUILD_EPOCH
     LOG_INFO("Build timestamp: %ld", BUILD_EPOCH);
 #endif
@@ -727,8 +742,11 @@ void setup()
 
     // We do this as early as possible because this loads preferences from flash
     // but we need to do this after main cpu init (esp32setup), because we need the random seed set
+    NRF54_SETUP_LOG("setup: NodeDB create begin");
+    NRF54_SETUP_PRINTK("NRF54 setup: NodeDB create begin\n");
     nodeDB = new NodeDB;
     NRF54_SETUP_LOG("setup: NodeDB created");
+    NRF54_SETUP_PRINTK("NRF54 setup: NodeDB created\n");
 
     // Initialize transmit history to persist broadcast throttle timers across reboots
     TransmitHistory::getInstance()->loadFromDisk();

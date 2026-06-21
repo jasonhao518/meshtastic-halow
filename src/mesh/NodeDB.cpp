@@ -33,6 +33,14 @@
 #include <power/PowerHAL.h>
 #include <vector>
 
+#ifdef ARCH_NRF54
+#include <zephyr/logging/log.h>
+LOG_MODULE_DECLARE(nrf54_setup_trace);
+#define NRF54_NODEDB_LOG(...) LOG_INF(__VA_ARGS__)
+#else
+#define NRF54_NODEDB_LOG(...) LOG_INFO(__VA_ARGS__)
+#endif
+
 #ifdef ARCH_ESP32
 #if HAS_WIFI
 #include "mesh/wifi/WiFiAPClient.h"
@@ -371,9 +379,13 @@ static uint8_t ourMacAddr[6];
 
 NodeDB::NodeDB()
 {
-    LOG_INFO("Init NodeDB");
+    NRF54_NODEDB_LOG("Init NodeDB");
+    NRF54_NODEDB_LOG("NodeDB: loadFromDisk begin");
     loadFromDisk();
+    NRF54_NODEDB_LOG("NodeDB: loadFromDisk done");
+    NRF54_NODEDB_LOG("NodeDB: cleanupMeshDB begin");
     cleanupMeshDB();
+    NRF54_NODEDB_LOG("NodeDB: cleanupMeshDB done");
 
     uint32_t devicestateCRC = crc32Buffer(&devicestate, sizeof(devicestate));
     uint32_t nodeDatabaseCRC = crc32Buffer(&nodeDatabase, sizeof(nodeDatabase));
@@ -426,7 +438,9 @@ NodeDB::NodeDB()
     myNodeInfo.min_app_version = 30200; // format is Mmmss (where M is 1+the numeric major number. i.e. 30200 means 2.2.00
     // Note! We do this after loading saved settings, so that if somehow an invalid nodenum was stored in preferences we won't
     // keep using that nodenum forever. Crummy guess at our nodenum (but we will check against the nodedb to avoid conflicts)
+    NRF54_NODEDB_LOG("NodeDB: pickNewNodeNum begin");
     pickNewNodeNum();
+    NRF54_NODEDB_LOG("NodeDB: pickNewNodeNum done node=0x%08x", getNodeNum());
 
     // Set our board type so we can share it with others
     owner.hw_model = HW_VENDOR;
@@ -438,6 +452,7 @@ NodeDB::NodeDB()
     snprintf(owner.id, sizeof(owner.id), "!%08x", getNodeNum());
 
     if (!config.has_security) {
+        NRF54_NODEDB_LOG("NodeDB: installing default security config");
         config.has_security = true;
         config.security = meshtastic_Config_SecurityConfig_init_default;
         config.security.serial_enabled = config.device.serial_enabled;
