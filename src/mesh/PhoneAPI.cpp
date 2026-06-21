@@ -696,6 +696,7 @@ void PhoneAPI::sendConfigComplete()
     NRF54_PHONEAPI_LOG("config complete nonce=%u nodes=%u replay=%u\n", config_nonce, nodeDB->getNumMeshNodes(),
                        config_nonce != SPECIAL_NONCE_ONLY_CONFIG);
     const bool shouldReplaySatellites = (config_nonce != SPECIAL_NONCE_ONLY_CONFIG);
+    const bool shouldSendPostCompleteQueueStatus = (config_nonce == SPECIAL_NONCE_ONLY_NODES);
     // The phone sees config_complete_id first (treats sync as done), then the cached
     // satellite-DB packets (positions / telemetry / environment / status) trickle in
     // afterward as ordinary mesh packets (except SPECIAL_NONCE_ONLY_CONFIG, which
@@ -724,6 +725,9 @@ void PhoneAPI::sendConfigComplete()
 
     // Allow subclasses to know we've entered steady-state so they can lower power consumption
     onConfigComplete();
+
+    if (shouldSendPostCompleteQueueStatus)
+        heartbeatReceived = true;
 
     pauseBluetoothLogging = false;
 }
