@@ -52,7 +52,7 @@ static ZephyrBluetoothPhoneAPI *phoneApi;
 
 #define BT_UUID_MESHTASTIC_SERVICE_VAL BT_UUID_128_ENCODE(0x6ba1b218, 0x15a8, 0x461f, 0x9fa8, 0x5dcae273eafd)
 #define BT_UUID_TORADIO_VAL BT_UUID_128_ENCODE(0xf75c76d2, 0x129e, 0x4dad, 0xa1dd, 0x7866124401e7)
-#define BT_UUID_FROMRADIO_VAL BT_UUID_128_ENCODE(0x2c55e69e, 0x499e, 0x11ed, 0xb878, 0x0242ac120002)
+#define BT_UUID_FROMRADIO_VAL BT_UUID_128_ENCODE(0x2c55e69e, 0x4993, 0x11ed, 0xb878, 0x0242ac120002)
 #define BT_UUID_FROMNUM_VAL BT_UUID_128_ENCODE(0xed9da18c, 0xa800, 0x4f66, 0xa670, 0xaa7547e34453)
 #define BT_UUID_LOGRADIO_VAL BT_UUID_128_ENCODE(0x5a3d6e49, 0x06e6, 0x4423, 0x9944, 0xe9de8cdf9547)
 
@@ -75,12 +75,14 @@ static ssize_t readFromRadio(struct bt_conn *conn, const struct bt_gatt_attr *at
     } else {
         fromRadioValueLen = 0;
     }
+    LOG_INF("BLE FromRadio read offset=%u mtuLen=%u outLen=%u", offset, len, fromRadioValueLen);
     return bt_gatt_attr_read(conn, attr, buf, len, offset, value, fromRadioValueLen);
 }
 
 static ssize_t readFromNum(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
 {
     (void)attr;
+    LOG_INF("BLE FromNum read offset=%u value=%u", offset, fromNumValue);
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &fromNumValue, sizeof(fromNumValue));
 }
 
@@ -104,9 +106,23 @@ static ssize_t writeToRadio(struct bt_conn *conn, const struct bt_gatt_attr *att
         return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
     }
     if (phoneApi) {
-        phoneApi->handleToRadio(static_cast<const uint8_t *>(buf), len);
+        bool handled = phoneApi->handleToRadio(static_cast<const uint8_t *>(buf), len);
+        LOG_INF("BLE ToRadio handled=%u", handled);
     }
     return len;
+}
+
+static void fromNumCccChanged(const struct bt_gatt_attr *attr, uint16_t value)
+{
+    (void)attr;
+    LOG_INF("BLE FromNum CCC value=0x%04x notify=%u", value, value == BT_GATT_CCC_NOTIFY);
+}
+
+static void logRadioCccChanged(const struct bt_gatt_attr *attr, uint16_t value)
+{
+    (void)attr;
+    LOG_INF("BLE LogRadio CCC value=0x%04x notify=%u indicate=%u", value, value == BT_GATT_CCC_NOTIFY,
+            value == BT_GATT_CCC_INDICATE);
 }
 
 static ssize_t readBattery(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
@@ -120,10 +136,10 @@ BT_GATT_SERVICE_DEFINE(meshtasticSvc, BT_GATT_PRIMARY_SERVICE(&meshSvcUuid),
                        BT_GATT_CHARACTERISTIC(&fromRadioUuid.uuid, BT_GATT_CHRC_READ, meshReadPerm, readFromRadio, nullptr, nullptr),
                        BT_GATT_CHARACTERISTIC(&fromNumUuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, meshReadPerm,
                                               readFromNum, nullptr, &fromNumValue),
-                       BT_GATT_CCC(nullptr, meshCccPerm),
+                       BT_GATT_CCC(fromNumCccChanged, meshCccPerm),
                        BT_GATT_CHARACTERISTIC(&logRadioUuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, meshReadPerm,
                                               readLogRadio, nullptr, nullptr),
-                       BT_GATT_CCC(nullptr, meshCccPerm));
+                       BT_GATT_CCC(logRadioCccChanged, meshCccPerm));
 
 BT_GATT_SERVICE_DEFINE(batterySvc, BT_GATT_PRIMARY_SERVICE(BT_UUID_BAS),
                        BT_GATT_CHARACTERISTIC(BT_UUID_BAS_BATTERY_LEVEL, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
@@ -150,7 +166,8 @@ void ZephyrBluetoothPhoneAPI::onConnectionChanged(bool connected)
 void ZephyrBluetoothPhoneAPI::onNowHasData(uint32_t fromRadioNum)
 {
     fromNumValue = fromRadioNum;
-    bt_gatt_notify(nullptr, &meshtasticSvc.attrs[6], &fromNumValue, sizeof(fromNumValue));
+    int err = bt_gatt_notify(nullptr, &meshtasticSvc.attrs[6], &fromNumValue, sizeof(fromNumValue));
+    LOG_INF("BLE FromNum notify value=%u err=%d", fromNumValue, err);
 }
 
 static const struct bt_data ad[] = {
@@ -326,6 +343,16 @@ static void connected(struct bt_conn *conn, uint8_t err)
     }
 }
 
+static void securityChanged(struct bt_conn *conn, bt_security_t level, enum bt_security_err err)
+{
+    (void)conn;
+    if (err) {
+        LOG_WRN("BLE security changed failed level=%u err=%u", level, err);
+    } else {
+        LOG_INF("BLE security changed level=%u", level);
+    }
+}
+
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
     if (currentConn) {
@@ -346,6 +373,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 BT_CONN_CB_DEFINE(connCallbacks) = {
     .connected = connected,
     .disconnected = disconnected,
+    .security_changed = securityChanged,
 };
 
 static void bleThreadEntry(void *, void *, void *)

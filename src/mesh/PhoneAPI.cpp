@@ -49,6 +49,8 @@ PhoneAPI::~PhoneAPI()
 
 void PhoneAPI::handleStartConfig()
 {
+    LOG_INFO("PhoneAPI start config nonce=%u state=%d connected=%u", config_nonce, state, isConnected());
+
     // Must be before setting state (because state is how we know !connected)
     if (!isConnected()) {
         onConnectionChanged(true);
@@ -175,8 +177,14 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
 
     memset(&toRadioScratch, 0, sizeof(toRadioScratch));
     if (pb_decode_from_bytes(buf, bufLength, &meshtastic_ToRadio_msg, &toRadioScratch)) {
+#ifdef ARCH_NRF54
+        LOG_INFO("PhoneAPI ToRadio decoded len=%u variant=%u state=%d", bufLength, toRadioScratch.which_payload_variant, state);
+#endif
         switch (toRadioScratch.which_payload_variant) {
         case meshtastic_ToRadio_packet_tag:
+#ifdef ARCH_NRF54
+            LOG_INFO("PhoneAPI ToRadio packet port=%u id=0x%x", toRadioScratch.packet.decoded.portnum, toRadioScratch.packet.id);
+#endif
             return handleToRadioPacket(toRadioScratch.packet);
         case meshtastic_ToRadio_want_config_id_tag:
             config_nonce = toRadioScratch.want_config_id;
@@ -210,6 +218,9 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
             break;
 #endif
         case meshtastic_ToRadio_heartbeat_tag:
+#ifdef ARCH_NRF54
+            LOG_INFO("PhoneAPI heartbeat nonce=%u", toRadioScratch.heartbeat.nonce);
+#endif
             // nonce==1 is a special "nodeinfo ping" trigger: force a fresh
             // NodeInfo broadcast on the 60-second shorterTimeout path so
             // peers can re-learn our public key after a reboot or
@@ -232,11 +243,14 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
             }
             break;
         default:
+#ifdef ARCH_NRF54
+            LOG_INFO("PhoneAPI ignore ToRadio variant=%u", toRadioScratch.which_payload_variant);
+#endif
             // Ignore nop messages
             break;
         }
     } else {
-        LOG_ERROR("Error: ignore malformed toradio");
+        LOG_ERROR("Error: ignore malformed toradio len=%u", bufLength);
     }
 
     return false;
@@ -270,11 +284,14 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
         fromRadioScratch.queueStatus = router->getQueueStatus();
         heartbeatReceived = false;
         size_t numbytes = pb_encode_to_bytes(buf, meshtastic_FromRadio_size, &meshtastic_FromRadio_msg, &fromRadioScratch);
-        LOG_DEBUG("FromRadio=STATE_SEND_QUEUE_STATUS, numbytes=%u", numbytes);
+        LOG_INFO("FromRadio=STATE_SEND_QUEUE_STATUS, numbytes=%u", numbytes);
         return numbytes;
     }
 
     if (!available()) {
+#ifdef ARCH_NRF54
+        LOG_INFO("FromRadio unavailable state=%d connected=%u", state, isConnected());
+#endif
         return 0;
     }
     // In case we send a FromRadio packet
@@ -627,10 +644,14 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
 
         // VERY IMPORTANT to not print debug messages while writing to fromRadioScratch - because we use that same buffer
         // for logging (when we are encapsulating with protobufs)
+#ifdef ARCH_NRF54
+        LOG_INFO("FromRadio encoded state=%d variant=%u len=%u nextFromNum=%u", state, fromRadioScratch.which_payload_variant,
+                 numbytes, fromRadioNum);
+#endif
         return numbytes;
     }
 
-    LOG_DEBUG("No FromRadio packet available");
+    LOG_INFO("No FromRadio packet available state=%d", state);
     return 0;
 }
 
