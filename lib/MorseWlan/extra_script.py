@@ -13,6 +13,13 @@ import subprocess
 
 Import("env")
 
+frameworks = env.get("PIOFRAMEWORK", [])
+if isinstance(frameworks, str):
+    frameworks = [frameworks]
+if "zephyr" in frameworks:
+    print(f"Skipping MorseWlan ESP32 wrapper for {env.subst('$PIOENV')}")
+    Return()
+
 PROJECT_DIR = env.subst("$PROJECT_DIR")
 BUILD_DIR = env.subst("$BUILD_DIR")
 SDK_DIR = os.path.join(PROJECT_DIR, "third_party", "mm-iot-esp32", "framework")
