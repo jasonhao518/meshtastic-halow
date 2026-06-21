@@ -30,6 +30,28 @@ class String : public std::string {
     String(float value, unsigned int decimals) : std::string(formatFloat(value, decimals)) {}
     String(double value, unsigned int decimals) : std::string(formatFloat(value, decimals)) {}
 
+    String operator+(const char *rhs) const
+    {
+        String out(*this);
+        out += rhs ? rhs : "";
+        return out;
+    }
+
+    String operator+(const String &rhs) const
+    {
+        String out(*this);
+        out += rhs;
+        return out;
+    }
+
+    template <typename T, typename = typename std::enable_if<std::is_integral<T>::value && !std::is_same<T, char>::value>::type>
+    String operator+(T rhs) const
+    {
+        String out(*this);
+        out += String(rhs);
+        return out;
+    }
+
     bool endsWith(const char *suffix) const
     {
         if (!suffix) {
@@ -89,6 +111,12 @@ class __FlashStringHelper;
 #define HEX 16
 #define OCT 8
 #define BIN 2
+#ifndef PI
+#define PI 3.14159265358979323846
+#endif
+#ifndef TWO_PI
+#define TWO_PI 6.28318530717958647692
+#endif
 #define PROGMEM
 #define F(str) (reinterpret_cast<const __FlashStringHelper *>(str))
 
@@ -102,6 +130,21 @@ static inline uint8_t pgm_read_byte(const void *addr)
 static inline uint32_t pgm_read_dword(const void *addr)
 {
     return *reinterpret_cast<const uint32_t *>(addr);
+}
+
+static inline double radians(double deg)
+{
+    return deg * (PI / 180.0);
+}
+
+static inline double degrees(double rad)
+{
+    return rad * (180.0 / PI);
+}
+
+template <typename T> static inline T sq(T value)
+{
+    return value * value;
 }
 
 uint32_t millis();
