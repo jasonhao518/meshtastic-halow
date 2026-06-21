@@ -17,6 +17,7 @@
 #include "TypeConversions.h"
 #include "concurrency/LockGuard.h"
 #include "main.h"
+#include "mesh/generated/meshtastic/admin.pb.h"
 #include "modules/NodeInfoModule.h"
 #include "xmodem.h"
 
@@ -39,6 +40,21 @@
     do {                                                                                                                             \
         printk("nrf54_phoneapi: " __VA_ARGS__);                                                                                      \
     } while (0)
+
+static void logNrf54AdminPayload(const char *prefix, const meshtastic_Data &decoded)
+{
+    if (decoded.portnum != meshtastic_PortNum_ADMIN_APP)
+        return;
+
+    meshtastic_AdminMessage admin = meshtastic_AdminMessage_init_zero;
+    if (pb_decode_from_bytes(decoded.payload.bytes, decoded.payload.size, &meshtastic_AdminMessage_msg, &admin)) {
+        NRF54_PHONEAPI_LOG("%s admin variant=%u request=0x%x reply=0x%x payload=%u\n", prefix, admin.which_payload_variant,
+                           decoded.request_id, decoded.reply_id, decoded.payload.size);
+    } else {
+        NRF54_PHONEAPI_LOG("%s admin decode failed request=0x%x reply=0x%x payload=%u\n", prefix, decoded.request_id,
+                           decoded.reply_id, decoded.payload.size);
+    }
+}
 #else
 #define NRF54_PHONEAPI_LOG(...)                                                                                                      \
     do {                                                                                                                             \
@@ -199,6 +215,12 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
         case meshtastic_ToRadio_packet_tag:
 #ifdef ARCH_NRF54
             LOG_INFO("PhoneAPI ToRadio packet port=%u id=0x%x", toRadioScratch.packet.decoded.portnum, toRadioScratch.packet.id);
+            NRF54_PHONEAPI_LOG("ToRadio packet from=0x%x to=0x%x port=%u id=0x%x want=%u req=0x%x reply=0x%x payload=%u\n",
+                               toRadioScratch.packet.from, toRadioScratch.packet.to, toRadioScratch.packet.decoded.portnum,
+                               toRadioScratch.packet.id, toRadioScratch.packet.decoded.want_response,
+                               toRadioScratch.packet.decoded.request_id, toRadioScratch.packet.decoded.reply_id,
+                               toRadioScratch.packet.decoded.payload.size);
+            logNrf54AdminPayload("ToRadio", toRadioScratch.packet.decoded);
 #endif
             NRF54_PHONEAPI_LOG("ToRadio packet port=%u id=0x%x\n", toRadioScratch.packet.decoded.portnum, toRadioScratch.packet.id);
             return handleToRadioPacket(toRadioScratch.packet);
@@ -670,6 +692,20 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
 
     // Do we have a message from the mesh?
     if (fromRadioScratch.which_payload_variant != 0) {
+#ifdef ARCH_NRF54
+        if (fromRadioScratch.which_payload_variant == meshtastic_FromRadio_packet_tag) {
+            const auto &decoded = fromRadioScratch.packet.decoded;
+            NRF54_PHONEAPI_LOG("FromRadio packet from=0x%x to=0x%x port=%u id=0x%x want=%u req=0x%x reply=0x%x payload=%u\n",
+                               fromRadioScratch.packet.from, fromRadioScratch.packet.to, decoded.portnum,
+                               fromRadioScratch.packet.id, decoded.want_response, decoded.request_id, decoded.reply_id,
+                               decoded.payload.size);
+            logNrf54AdminPayload("FromRadio", decoded);
+        } else if (fromRadioScratch.which_payload_variant == meshtastic_FromRadio_clientNotification_tag) {
+            NRF54_PHONEAPI_LOG("FromRadio client_notification level=%u reply=0x%x msg=%s\n",
+                               fromRadioScratch.clientNotification.level, fromRadioScratch.clientNotification.reply_id,
+                               fromRadioScratch.clientNotification.message);
+        }
+#endif
         // Encapsulate as a FromRadio packet
         fromRadioScratch.id = ++fromRadioNum;
         size_t numbytes = pb_encode_to_bytes(buf, meshtastic_FromRadio_size, &meshtastic_FromRadio_msg, &fromRadioScratch);
@@ -696,7 +732,6 @@ void PhoneAPI::sendConfigComplete()
     NRF54_PHONEAPI_LOG("config complete nonce=%u nodes=%u replay=%u\n", config_nonce, nodeDB->getNumMeshNodes(),
                        config_nonce != SPECIAL_NONCE_ONLY_CONFIG);
     const bool shouldReplaySatellites = (config_nonce != SPECIAL_NONCE_ONLY_CONFIG);
-    const bool shouldSendPostCompleteQueueStatus = (config_nonce == SPECIAL_NONCE_ONLY_NODES);
     // The phone sees config_complete_id first (treats sync as done), then the cached
     // satellite-DB packets (positions / telemetry / environment / status) trickle in
     // afterward as ordinary mesh packets (except SPECIAL_NONCE_ONLY_CONFIG, which
@@ -725,9 +760,6 @@ void PhoneAPI::sendConfigComplete()
 
     // Allow subclasses to know we've entered steady-state so they can lower power consumption
     onConfigComplete();
-
-    if (shouldSendPostCompleteQueueStatus)
-        heartbeatReceived = true;
 
     pauseBluetoothLogging = false;
 }
