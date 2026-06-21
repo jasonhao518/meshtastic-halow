@@ -5,6 +5,7 @@
 #include "PowerFSM.h"
 #include "configuration.h"
 #include "main.h"
+#include "mesh/mesh-pb-constants.h"
 #include "mesh/PhoneAPI.h"
 #include "target_specific.h"
 
@@ -34,6 +35,8 @@ static constexpr size_t bleThreadStackSize = 12288;
 static constexpr unsigned int fixedPasskey = 123456;
 static uint8_t fromRadioValue[meshtastic_FromRadio_size];
 static uint16_t fromRadioValueLen;
+static uint32_t fromRadioReadGeneration;
+static bool deferSteadyReadAfterQueueStatus;
 static uint32_t fromNumValue;
 static uint8_t batteryLevel = 100;
 static char advertisedName[20];
@@ -66,17 +69,58 @@ static constexpr bt_gatt_perm meshReadPerm = static_cast<bt_gatt_perm>(BT_GATT_P
 static constexpr bt_gatt_perm meshWritePerm = static_cast<bt_gatt_perm>(BT_GATT_PERM_WRITE | BT_GATT_PERM_WRITE_ENCRYPT);
 static constexpr bt_gatt_perm meshCccPerm = static_cast<bt_gatt_perm>(meshReadPerm | meshWritePerm);
 
+static void drainKickWorkHandler(struct k_work *work);
+K_WORK_DELAYABLE_DEFINE(drainKickWork, drainKickWorkHandler);
+
+static bool isAckedQueueStatusFrame(const uint8_t *buf, uint16_t len)
+{
+    meshtastic_FromRadio fromRadio = meshtastic_FromRadio_init_zero;
+    return pb_decode_from_bytes(buf, len, &meshtastic_FromRadio_msg, &fromRadio) &&
+           fromRadio.which_payload_variant == meshtastic_FromRadio_queueStatus_tag &&
+           fromRadio.queueStatus.mesh_packet_id != 0;
+}
+
 static ssize_t readFromRadio(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
 {
     (void)conn;
     const uint8_t *value = fromRadioValue;
-    if (appReady && phoneApi) {
-        fromRadioValueLen = phoneApi->getFromRadio(fromRadioValue);
-    } else {
+    if (offset == 0 && appReady && phoneApi) {
+        if (deferSteadyReadAfterQueueStatus && phoneApi->isSendingPackets()) {
+            deferSteadyReadAfterQueueStatus = false;
+            fromRadioValueLen = 0;
+            k_work_reschedule(&drainKickWork, K_MSEC(30));
+            LOG_INF("BLE FromRadio inserting empty read after queue status");
+        } else {
+            fromRadioValueLen = phoneApi->getFromRadio(fromRadioValue);
+            if (phoneApi->isSendingPackets() && fromRadioValueLen != 0 && isAckedQueueStatusFrame(fromRadioValue, fromRadioValueLen)) {
+                deferSteadyReadAfterQueueStatus = true;
+                k_work_reschedule(&drainKickWork, K_MSEC(30));
+                LOG_INF("BLE FromRadio queue status boundary armed gen=%u", fromRadioReadGeneration + 1);
+            }
+        }
+        fromRadioReadGeneration++;
+    } else if (offset == 0) {
         fromRadioValueLen = 0;
+        fromRadioReadGeneration++;
     }
-    LOG_INF("BLE FromRadio read offset=%u mtuLen=%u outLen=%u", offset, len, fromRadioValueLen);
-    return bt_gatt_attr_read(conn, attr, buf, len, offset, value, fromRadioValueLen);
+
+    if (offset > fromRadioValueLen) {
+        LOG_WRN("BLE FromRadio read invalid offset=%u cachedLen=%u gen=%u", offset, fromRadioValueLen,
+                fromRadioReadGeneration);
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+    }
+
+    ssize_t readLen = bt_gatt_attr_read(conn, attr, buf, len, offset, value, fromRadioValueLen);
+    LOG_INF("BLE FromRadio read offset=%u mtuLen=%u cachedLen=%u gen=%u return=%d", offset, len, fromRadioValueLen,
+            fromRadioReadGeneration, static_cast<int>(readLen));
+    return readLen;
+}
+
+static void resetFromRadioReadCache()
+{
+    fromRadioValueLen = 0;
+    fromRadioReadGeneration++;
+    deferSteadyReadAfterQueueStatus = false;
 }
 
 static ssize_t readFromNum(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
@@ -105,6 +149,7 @@ static ssize_t writeToRadio(struct bt_conn *conn, const struct bt_gatt_attr *att
     if (!appReady) {
         return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
     }
+    resetFromRadioReadCache();
     if (phoneApi) {
         bool handled = phoneApi->handleToRadio(static_cast<const uint8_t *>(buf), len);
         LOG_INF("BLE ToRadio handled=%u", handled);
@@ -145,6 +190,20 @@ BT_GATT_SERVICE_DEFINE(batterySvc, BT_GATT_PRIMARY_SERVICE(BT_UUID_BAS),
                        BT_GATT_CHARACTERISTIC(BT_UUID_BAS_BATTERY_LEVEL, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
                                               BT_GATT_PERM_READ, readBattery, nullptr, &batteryLevel),
                        BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE));
+
+static void drainKickWorkHandler(struct k_work *work)
+{
+    (void)work;
+    if (!currentConn || !appReady || !phoneApi || !phoneApi->isSendingPackets()) {
+        LOG_INF("BLE FromRadio delayed kick skipped connected=%u appReady=%u phoneApi=%p", currentConn != nullptr, appReady,
+                phoneApi);
+        return;
+    }
+
+    fromNumValue++;
+    int err = bt_gatt_notify(nullptr, &meshtasticSvc.attrs[6], &fromNumValue, sizeof(fromNumValue));
+    LOG_INF("BLE FromNum delayed kick value=%u err=%d", fromNumValue, err);
+}
 
 ZephyrBluetoothPhoneAPI::ZephyrBluetoothPhoneAPI()
 {
@@ -363,6 +422,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
     if (appReady && phoneApi) {
         phoneApi->close();
     }
+    resetFromRadioReadCache();
     LOG_INF("BLE disconnected reason=%u appReady=%u", reason, appReady);
     if (appReady) {
         meshtastic::BluetoothStatus status(meshtastic::BluetoothStatus::ConnectionState::DISCONNECTED);

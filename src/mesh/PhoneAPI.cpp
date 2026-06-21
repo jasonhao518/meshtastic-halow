@@ -41,6 +41,49 @@
         printk("nrf54_phoneapi: " __VA_ARGS__);                                                                                      \
     } while (0)
 
+static const char *nrf54ConfigName(uint32_t configType);
+static const char *nrf54ModuleConfigName(uint32_t configType);
+static const char *nrf54AdminConfigRequestName(uint32_t configType);
+static const char *nrf54AdminModuleConfigRequestName(uint32_t configType);
+
+static const char *nrf54AdminPayloadName(uint32_t payload)
+{
+    switch (payload) {
+    case meshtastic_AdminMessage_get_channel_request_tag:
+        return "get_channel_request";
+    case meshtastic_AdminMessage_get_channel_response_tag:
+        return "get_channel_response";
+    case meshtastic_AdminMessage_get_owner_request_tag:
+        return "get_owner_request";
+    case meshtastic_AdminMessage_get_owner_response_tag:
+        return "get_owner_response";
+    case meshtastic_AdminMessage_get_config_request_tag:
+        return "get_config_request";
+    case meshtastic_AdminMessage_get_config_response_tag:
+        return "get_config_response";
+    case meshtastic_AdminMessage_get_module_config_request_tag:
+        return "get_module_config_request";
+    case meshtastic_AdminMessage_get_module_config_response_tag:
+        return "get_module_config_response";
+    case meshtastic_AdminMessage_get_device_metadata_request_tag:
+        return "get_device_metadata_request";
+    case meshtastic_AdminMessage_get_device_metadata_response_tag:
+        return "get_device_metadata_response";
+    case meshtastic_AdminMessage_set_config_tag:
+        return "set_config";
+    case meshtastic_AdminMessage_set_module_config_tag:
+        return "set_module_config";
+    case meshtastic_AdminMessage_set_channel_tag:
+        return "set_channel";
+    case meshtastic_AdminMessage_begin_edit_settings_tag:
+        return "begin_edit_settings";
+    case meshtastic_AdminMessage_commit_edit_settings_tag:
+        return "commit_edit_settings";
+    default:
+        return "other";
+    }
+}
+
 static void logNrf54AdminPayload(const char *prefix, const meshtastic_Data &decoded)
 {
     if (decoded.portnum != meshtastic_PortNum_ADMIN_APP)
@@ -48,11 +91,168 @@ static void logNrf54AdminPayload(const char *prefix, const meshtastic_Data &deco
 
     meshtastic_AdminMessage admin = meshtastic_AdminMessage_init_zero;
     if (pb_decode_from_bytes(decoded.payload.bytes, decoded.payload.size, &meshtastic_AdminMessage_msg, &admin)) {
-        NRF54_PHONEAPI_LOG("%s admin variant=%u request=0x%x reply=0x%x payload=%u\n", prefix, admin.which_payload_variant,
-                           decoded.request_id, decoded.reply_id, decoded.payload.size);
+        NRF54_PHONEAPI_LOG("%s admin variant=%u name=%s request=0x%x reply=0x%x payload=%u passkey=%u\n", prefix,
+                           admin.which_payload_variant, nrf54AdminPayloadName(admin.which_payload_variant), decoded.request_id,
+                           decoded.reply_id, decoded.payload.size, admin.session_passkey.size);
+        if (admin.which_payload_variant == meshtastic_AdminMessage_get_config_request_tag) {
+            NRF54_PHONEAPI_LOG("%s admin get_config type=%u name=%s\n", prefix, admin.get_config_request,
+                               nrf54AdminConfigRequestName(admin.get_config_request));
+        } else if (admin.which_payload_variant == meshtastic_AdminMessage_get_config_response_tag) {
+            NRF54_PHONEAPI_LOG("%s admin get_config_response type=%u name=%s\n", prefix,
+                               admin.get_config_response.which_payload_variant,
+                               nrf54ConfigName(admin.get_config_response.which_payload_variant));
+        } else if (admin.which_payload_variant == meshtastic_AdminMessage_get_module_config_request_tag) {
+            NRF54_PHONEAPI_LOG("%s admin get_module_config type=%u name=%s\n", prefix, admin.get_module_config_request,
+                               nrf54AdminModuleConfigRequestName(admin.get_module_config_request));
+        } else if (admin.which_payload_variant == meshtastic_AdminMessage_get_module_config_response_tag) {
+            NRF54_PHONEAPI_LOG("%s admin get_module_config_response type=%u name=%s\n", prefix,
+                               admin.get_module_config_response.which_payload_variant,
+                               nrf54ModuleConfigName(admin.get_module_config_response.which_payload_variant));
+        } else if (admin.which_payload_variant == meshtastic_AdminMessage_get_channel_request_tag) {
+            NRF54_PHONEAPI_LOG("%s admin get_channel request=%u index=%d\n", prefix, admin.get_channel_request,
+                               static_cast<int>(admin.get_channel_request) - 1);
+        } else if (admin.which_payload_variant == meshtastic_AdminMessage_get_channel_response_tag) {
+            NRF54_PHONEAPI_LOG("%s admin get_channel_response index=%u role=%u has_settings=%u\n", prefix,
+                               admin.get_channel_response.index, admin.get_channel_response.role,
+                               admin.get_channel_response.has_settings);
+        }
     } else {
         NRF54_PHONEAPI_LOG("%s admin decode failed request=0x%x reply=0x%x payload=%u\n", prefix, decoded.request_id,
                            decoded.reply_id, decoded.payload.size);
+    }
+}
+
+static const char *nrf54ConfigName(uint32_t configType)
+{
+    switch (configType) {
+    case meshtastic_Config_device_tag:
+        return "device";
+    case meshtastic_Config_position_tag:
+        return "position";
+    case meshtastic_Config_power_tag:
+        return "power";
+    case meshtastic_Config_network_tag:
+        return "network";
+    case meshtastic_Config_display_tag:
+        return "display";
+    case meshtastic_Config_lora_tag:
+        return "lora";
+    case meshtastic_Config_bluetooth_tag:
+        return "bluetooth";
+    case meshtastic_Config_security_tag:
+        return "security";
+    case meshtastic_Config_sessionkey_tag:
+        return "sessionkey";
+    case meshtastic_Config_device_ui_tag:
+        return "device_ui";
+    default:
+        return "unknown";
+    }
+}
+
+static const char *nrf54AdminConfigRequestName(uint32_t configType)
+{
+    switch (configType) {
+    case meshtastic_AdminMessage_ConfigType_DEVICE_CONFIG:
+        return "device";
+    case meshtastic_AdminMessage_ConfigType_POSITION_CONFIG:
+        return "position";
+    case meshtastic_AdminMessage_ConfigType_POWER_CONFIG:
+        return "power";
+    case meshtastic_AdminMessage_ConfigType_NETWORK_CONFIG:
+        return "network";
+    case meshtastic_AdminMessage_ConfigType_DISPLAY_CONFIG:
+        return "display";
+    case meshtastic_AdminMessage_ConfigType_LORA_CONFIG:
+        return "lora";
+    case meshtastic_AdminMessage_ConfigType_BLUETOOTH_CONFIG:
+        return "bluetooth";
+    case meshtastic_AdminMessage_ConfigType_SECURITY_CONFIG:
+        return "security";
+    case meshtastic_AdminMessage_ConfigType_SESSIONKEY_CONFIG:
+        return "sessionkey";
+    case meshtastic_AdminMessage_ConfigType_DEVICEUI_CONFIG:
+        return "device_ui";
+    default:
+        return "unknown";
+    }
+}
+
+static const char *nrf54ModuleConfigName(uint32_t configType)
+{
+    switch (configType) {
+    case meshtastic_ModuleConfig_mqtt_tag:
+        return "mqtt";
+    case meshtastic_ModuleConfig_serial_tag:
+        return "serial";
+    case meshtastic_ModuleConfig_external_notification_tag:
+        return "external_notification";
+    case meshtastic_ModuleConfig_store_forward_tag:
+        return "store_forward";
+    case meshtastic_ModuleConfig_range_test_tag:
+        return "range_test";
+    case meshtastic_ModuleConfig_telemetry_tag:
+        return "telemetry";
+    case meshtastic_ModuleConfig_canned_message_tag:
+        return "canned_message";
+    case meshtastic_ModuleConfig_audio_tag:
+        return "audio";
+    case meshtastic_ModuleConfig_remote_hardware_tag:
+        return "remote_hardware";
+    case meshtastic_ModuleConfig_neighbor_info_tag:
+        return "neighbor_info";
+    case meshtastic_ModuleConfig_detection_sensor_tag:
+        return "detection_sensor";
+    case meshtastic_ModuleConfig_ambient_lighting_tag:
+        return "ambient_lighting";
+    case meshtastic_ModuleConfig_paxcounter_tag:
+        return "paxcounter";
+    case meshtastic_ModuleConfig_traffic_management_tag:
+        return "traffic_management";
+    case meshtastic_ModuleConfig_tak_tag:
+        return "tak";
+    default:
+        return "unknown";
+    }
+}
+
+static const char *nrf54AdminModuleConfigRequestName(uint32_t configType)
+{
+    switch (configType) {
+    case meshtastic_AdminMessage_ModuleConfigType_MQTT_CONFIG:
+        return "mqtt";
+    case meshtastic_AdminMessage_ModuleConfigType_SERIAL_CONFIG:
+        return "serial";
+    case meshtastic_AdminMessage_ModuleConfigType_EXTNOTIF_CONFIG:
+        return "external_notification";
+    case meshtastic_AdminMessage_ModuleConfigType_STOREFORWARD_CONFIG:
+        return "store_forward";
+    case meshtastic_AdminMessage_ModuleConfigType_RANGETEST_CONFIG:
+        return "range_test";
+    case meshtastic_AdminMessage_ModuleConfigType_TELEMETRY_CONFIG:
+        return "telemetry";
+    case meshtastic_AdminMessage_ModuleConfigType_CANNEDMSG_CONFIG:
+        return "canned_message";
+    case meshtastic_AdminMessage_ModuleConfigType_AUDIO_CONFIG:
+        return "audio";
+    case meshtastic_AdminMessage_ModuleConfigType_REMOTEHARDWARE_CONFIG:
+        return "remote_hardware";
+    case meshtastic_AdminMessage_ModuleConfigType_NEIGHBORINFO_CONFIG:
+        return "neighbor_info";
+    case meshtastic_AdminMessage_ModuleConfigType_AMBIENTLIGHTING_CONFIG:
+        return "ambient_lighting";
+    case meshtastic_AdminMessage_ModuleConfigType_DETECTIONSENSOR_CONFIG:
+        return "detection_sensor";
+    case meshtastic_AdminMessage_ModuleConfigType_PAXCOUNTER_CONFIG:
+        return "paxcounter";
+    case meshtastic_AdminMessage_ModuleConfigType_STATUSMESSAGE_CONFIG:
+        return "status_message";
+    case meshtastic_AdminMessage_ModuleConfigType_TRAFFICMANAGEMENT_CONFIG:
+        return "traffic_management";
+    case meshtastic_AdminMessage_ModuleConfigType_TAK_CONFIG:
+        return "tak";
+    default:
+        return "unknown";
     }
 }
 #else
@@ -77,9 +277,12 @@ PhoneAPI::~PhoneAPI()
 
 void PhoneAPI::handleStartConfig()
 {
+    const char *configKind = config_nonce == SPECIAL_NONCE_ONLY_CONFIG    ? "config-only"
+                             : config_nonce == SPECIAL_NONCE_ONLY_NODES ? "nodes-only"
+                                                                         : "full";
     LOG_INFO("PhoneAPI start config nonce=%u state=%d connected=%u", config_nonce, state, isConnected());
-    NRF54_PHONEAPI_LOG("start config nonce=%u state=%d connected=%u nodes=%u\n", config_nonce, state, isConnected(),
-                       nodeDB ? nodeDB->getNumMeshNodes() : 0);
+    NRF54_PHONEAPI_LOG("start config nonce=%u kind=%s state=%d connected=%u nodes=%u\n", config_nonce, configKind, state,
+                       isConnected(), nodeDB ? nodeDB->getNumMeshNodes() : 0);
 
     // Must be before setting state (because state is how we know !connected)
     if (!isConnected()) {
@@ -328,7 +531,9 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
         fromRadioScratch.id = ++fromRadioNum;
         size_t numbytes = pb_encode_to_bytes(buf, meshtastic_FromRadio_size, &meshtastic_FromRadio_msg, &fromRadioScratch);
         LOG_INFO("FromRadio=STATE_SEND_QUEUE_STATUS, numbytes=%u", numbytes);
-        NRF54_PHONEAPI_LOG("FromRadio queue_status id=%u len=%u\n", fromRadioScratch.id, numbytes);
+        NRF54_PHONEAPI_LOG("FromRadio heartbeat queue_status id=%u len=%u res=%d free=%u max=%u mesh=0x%x\n",
+                           fromRadioScratch.id, numbytes, fromRadioScratch.queueStatus.res, fromRadioScratch.queueStatus.free,
+                           fromRadioScratch.queueStatus.maxlen, fromRadioScratch.queueStatus.mesh_packet_id);
         return numbytes;
     }
 
@@ -336,7 +541,7 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
 #ifdef ARCH_NRF54
         LOG_INFO("FromRadio unavailable state=%d connected=%u", state, isConnected());
 #endif
-        NRF54_PHONEAPI_LOG("FromRadio unavailable state=%d connected=%u\n", state, isConnected());
+        NRF54_PHONEAPI_LOG("FromRadio unavailable state=%d connected=%u nonce=%u\n", state, isConnected(), config_nonce);
         return 0;
     }
     // In case we send a FromRadio packet
@@ -409,9 +614,12 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
     case STATE_SEND_CHANNELS:
         fromRadioScratch.which_payload_variant = meshtastic_FromRadio_channel_tag;
         fromRadioScratch.channel = channels.getByIndex(config_state);
+        NRF54_PHONEAPI_LOG("send channel index=%u role=%u has_settings=%u\n", fromRadioScratch.channel.index,
+                           fromRadioScratch.channel.role, fromRadioScratch.channel.has_settings);
         config_state++;
         // Advance when we have sent all of our Channels
         if (config_state >= MAX_NUM_CHANNELS) {
+            NRF54_PHONEAPI_LOG("channels complete count=%u\n", config_state);
             LOG_DEBUG("Send channels %d", config_state);
             state = STATE_SEND_CONFIG;
             config_state = _meshtastic_AdminMessage_ConfigType_MIN + 1;
@@ -420,6 +628,7 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
 
     case STATE_SEND_CONFIG:
         fromRadioScratch.which_payload_variant = meshtastic_FromRadio_config_tag;
+        NRF54_PHONEAPI_LOG("send config type=%u name=%s\n", config_state, nrf54ConfigName(config_state));
         switch (config_state) {
         case meshtastic_Config_device_tag:
             LOG_DEBUG("Send config: device");
@@ -479,6 +688,7 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
         config_state++;
         // Advance when we have sent all of our config objects
         if (config_state > (_meshtastic_AdminMessage_ConfigType_MAX + 1)) {
+            NRF54_PHONEAPI_LOG("configs complete next_state=moduleconfig\n");
             state = STATE_SEND_MODULECONFIG;
             config_state = _meshtastic_AdminMessage_ModuleConfigType_MIN + 1;
         }
@@ -486,6 +696,7 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
 
     case STATE_SEND_MODULECONFIG:
         fromRadioScratch.which_payload_variant = meshtastic_FromRadio_moduleConfig_tag;
+        NRF54_PHONEAPI_LOG("send module_config type=%u name=%s\n", config_state, nrf54ModuleConfigName(config_state));
         switch (config_state) {
         case meshtastic_ModuleConfig_mqtt_tag:
             LOG_DEBUG("Send module config: mqtt");
@@ -573,8 +784,10 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
             // - SPECIAL_NONCE_ONLY_CONFIG: Skip node info, go directly to file manifest
             // - SPECIAL_NONCE_ONLY_NODES: After sending nodes, skip to complete
             if (config_nonce == SPECIAL_NONCE_ONLY_CONFIG) {
+                NRF54_PHONEAPI_LOG("module configs complete; config-only jumps to file manifest\n");
                 state = STATE_SEND_FILEMANIFEST;
             } else {
+                NRF54_PHONEAPI_LOG("module configs complete; continuing to nodeinfos\n");
                 state = STATE_SEND_OTHER_NODEINFOS;
                 onNowHasData(0);
             }
@@ -629,6 +842,7 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
         LOG_DEBUG("FromRadio=STATE_SEND_FILEMANIFEST");
         // ONLY_NODES variants skip the manifest.
         if (config_state == filesManifest.size() || config_nonce == SPECIAL_NONCE_ONLY_NODES) {
+            NRF54_PHONEAPI_LOG("file manifest complete count=%u nonce=%u\n", (unsigned)filesManifest.size(), config_nonce);
             config_state = 0;
             filesManifest.clear();
             // Skip to complete packet
@@ -637,6 +851,8 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
             fromRadioScratch.which_payload_variant = meshtastic_FromRadio_fileInfo_tag;
             fromRadioScratch.fileInfo = filesManifest.at(config_state);
             LOG_DEBUG("File: %s (%d) bytes", fromRadioScratch.fileInfo.file_name, fromRadioScratch.fileInfo.size_bytes);
+            NRF54_PHONEAPI_LOG("send file_info index=%u name=%s size=%u\n", config_state,
+                               fromRadioScratch.fileInfo.file_name, fromRadioScratch.fileInfo.size_bytes);
             config_state++;
         }
         break;
@@ -653,6 +869,9 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
         if (queueStatusPacketForPhone) {
             fromRadioScratch.which_payload_variant = meshtastic_FromRadio_queueStatus_tag;
             fromRadioScratch.queueStatus = *queueStatusPacketForPhone;
+            NRF54_PHONEAPI_LOG("FromRadio queued queue_status res=%d free=%u max=%u mesh=0x%x\n",
+                               fromRadioScratch.queueStatus.res, fromRadioScratch.queueStatus.free,
+                               fromRadioScratch.queueStatus.maxlen, fromRadioScratch.queueStatus.mesh_packet_id);
             releaseQueueStatusPhonePacket();
         } else if (mqttClientProxyMessageForPhone) {
             fromRadioScratch.which_payload_variant = meshtastic_FromRadio_mqttClientProxyMessage_tag;
@@ -716,13 +935,13 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
         LOG_INFO("FromRadio encoded state=%d variant=%u id=%u len=%u", state, fromRadioScratch.which_payload_variant,
                  fromRadioScratch.id, numbytes);
 #endif
-        NRF54_PHONEAPI_LOG("FromRadio encoded state=%d variant=%u id=%u len=%u\n", state,
-                           fromRadioScratch.which_payload_variant, fromRadioScratch.id, numbytes);
+        NRF54_PHONEAPI_LOG("FromRadio encoded state=%d variant=%u id=%u len=%u nonce=%u\n", state,
+                           fromRadioScratch.which_payload_variant, fromRadioScratch.id, numbytes, config_nonce);
         return numbytes;
     }
 
     LOG_INFO("No FromRadio packet available state=%d", state);
-    NRF54_PHONEAPI_LOG("No FromRadio state=%d\n", state);
+    NRF54_PHONEAPI_LOG("No FromRadio state=%d nonce=%u\n", state, config_nonce);
     return 0;
 }
 

@@ -21,6 +21,9 @@
 #ifdef ARCH_PORTDUINO
 #include "unistd.h"
 #endif
+#ifdef ARCH_NRF54
+#include <zephyr/sys/printk.h>
+#endif
 
 #include "Default.h"
 #include "MeshRadio.h"
@@ -53,6 +56,17 @@
 AdminModule *adminModule;
 bool hasOpenEditTransaction;
 
+#ifdef ARCH_NRF54
+#define NRF54_ADMIN_LOG(...)                                                                                                         \
+    do {                                                                                                                             \
+        printk("nrf54_admin: " __VA_ARGS__);                                                                                         \
+    } while (0)
+#else
+#define NRF54_ADMIN_LOG(...)                                                                                                         \
+    do {                                                                                                                             \
+    } while (0)
+#endif
+
 /// A special reserved string to indicate strings we can not share with external nodes.  We will use this 'reserved' word instead.
 /// Also, to make setting work correctly, if someone tries to set a string to this reserved value we assume they don't really want
 /// a change.
@@ -82,22 +96,33 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
     if (mp.which_payload_variant != meshtastic_MeshPacket_decoded_tag) {
         return handled;
     }
+    const bool fromUs = isFromUs(&mp);
+    const bool toUs = isToUs(&mp);
+    const bool localAdmin = mp.from == 0 || (fromUs && toUs);
+    NRF54_ADMIN_LOG("rx variant=%u from=0x%x to=0x%x channel=%u id=0x%x want=%u req=0x%x reply=0x%x fromUs=%u toUs=%u\n",
+                    r->which_payload_variant, mp.from, mp.to, mp.channel, mp.id, mp.decoded.want_response,
+                    mp.decoded.request_id, mp.decoded.reply_id, fromUs, toUs);
     meshtastic_Channel *ch = &channels.getByIndex(mp.channel);
     // Could tighten this up further by tracking the last public_key we went an AdminMessage request to
     // and only allowing responses from that remote.
     if (messageIsResponse(r)) {
         LOG_DEBUG("Allow admin response message");
-    } else if (mp.from == 0) {
+        NRF54_ADMIN_LOG("allow response payload\n");
+    } else if (localAdmin) {
         if (config.security.is_managed) {
             LOG_INFO("Ignore local admin payload because is_managed");
+            NRF54_ADMIN_LOG("reject local admin because managed mode is enabled\n");
             return handled;
         }
+        NRF54_ADMIN_LOG("allow local admin payload from=0x%x\n", mp.from);
     } else if (strcasecmp(ch->settings.name, Channels::adminChannel) == 0) {
         if (!config.security.admin_channel_enabled) {
             LOG_INFO("Ignore admin channel, legacy admin is disabled");
+            NRF54_ADMIN_LOG("reject legacy admin channel because disabled\n");
             myReply = allocErrorResponse(meshtastic_Routing_Error_NOT_AUTHORIZED, &mp);
             return handled;
         }
+        NRF54_ADMIN_LOG("allow legacy admin channel payload\n");
     } else if (mp.pki_encrypted) {
         if ((config.security.admin_key[0].size == 32 &&
              memcmp(mp.public_key.bytes, config.security.admin_key[0].bytes, 32) == 0) ||
@@ -122,21 +147,25 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
         } else {
             myReply = allocErrorResponse(meshtastic_Routing_Error_ADMIN_PUBLIC_KEY_UNAUTHORIZED, &mp);
             LOG_INFO("Received PKC admin payload, but the sender public key does not match the admin authorized key!");
+            NRF54_ADMIN_LOG("reject pki admin unauthorized key\n");
             return handled;
         }
     } else {
         LOG_INFO("Ignore unauthorized admin payload %i", r->which_payload_variant);
+        NRF54_ADMIN_LOG("reject unauthorized admin payload variant=%u\n", r->which_payload_variant);
         myReply = allocErrorResponse(meshtastic_Routing_Error_NOT_AUTHORIZED, &mp);
         return handled;
     }
 
     LOG_INFO("Handle admin payload %i", r->which_payload_variant);
+    NRF54_ADMIN_LOG("handle payload variant=%u\n", r->which_payload_variant);
 
     // all of the get and set messages, including those for other modules, flow through here first.
     // any message that changes state, we want to check the passkey for
-    if (mp.from != 0 && !messageIsRequest(r) && !messageIsResponse(r)) {
+    if (!localAdmin && !messageIsRequest(r) && !messageIsResponse(r)) {
         if (!checkPassKey(r)) {
             LOG_WARN("Admin message without session_key!");
+            NRF54_ADMIN_LOG("reject bad session key variant=%u\n", r->which_payload_variant);
             myReply = allocErrorResponse(meshtastic_Routing_Error_ADMIN_BAD_SESSION_KEY, &mp);
             return handled;
         }
@@ -589,11 +618,14 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
 
     // If asked for a response and it is not yet set, generate an 'ACK' response
     if (mp.decoded.want_response && !myReply) {
+        NRF54_ADMIN_LOG("generate default ack response for variant=%u\n", r->which_payload_variant);
         myReply = allocErrorResponse(meshtastic_Routing_Error_NONE, &mp);
     }
     if (mp.pki_encrypted && myReply) {
         myReply->pki_encrypted = true;
     }
+    NRF54_ADMIN_LOG("done variant=%u reply=%u pki=%u\n", r->which_payload_variant, myReply != nullptr,
+                    myReply ? myReply->pki_encrypted : 0);
     return handled;
 }
 
@@ -1070,6 +1102,7 @@ void AdminModule::handleSetChannel(const meshtastic_Channel &cc)
 void AdminModule::handleGetOwner(const meshtastic_MeshPacket &req)
 {
     if (req.decoded.want_response) {
+        NRF54_ADMIN_LOG("build get_owner_response req=0x%x\n", req.id);
         // We create the reply here
         meshtastic_AdminMessage res = meshtastic_AdminMessage_init_default;
         res.get_owner_response = owner;
@@ -1088,6 +1121,7 @@ void AdminModule::handleGetConfig(const meshtastic_MeshPacket &req, const uint32
     meshtastic_AdminMessage res = meshtastic_AdminMessage_init_default;
 
     if (req.decoded.want_response) {
+        NRF54_ADMIN_LOG("build get_config_response type=%u req=0x%x\n", configType, req.id);
         switch (configType) {
         case meshtastic_AdminMessage_ConfigType_DEVICE_CONFIG:
             LOG_INFO("Get config: Device");
@@ -1162,6 +1196,7 @@ void AdminModule::handleGetModuleConfig(const meshtastic_MeshPacket &req, const 
     meshtastic_AdminMessage res = meshtastic_AdminMessage_init_default;
 
     if (req.decoded.want_response) {
+        NRF54_ADMIN_LOG("build get_module_config_response type=%u req=0x%x\n", configType, req.id);
         const char *configName = "?";
         switch (configType) {
         case meshtastic_AdminMessage_ModuleConfigType_MQTT_CONFIG:
@@ -1371,6 +1406,7 @@ void AdminModule::handleGetDeviceConnectionStatus(const meshtastic_MeshPacket &r
 void AdminModule::handleGetChannel(const meshtastic_MeshPacket &req, uint32_t channelIndex)
 {
     if (req.decoded.want_response) {
+        NRF54_ADMIN_LOG("build get_channel_response index=%u req=0x%x\n", channelIndex, req.id);
         // We create the reply here
         meshtastic_AdminMessage r = meshtastic_AdminMessage_init_default;
         r.get_channel_response = channels.getByIndex(channelIndex);
