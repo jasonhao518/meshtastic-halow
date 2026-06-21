@@ -243,9 +243,9 @@ void nrf54BluetoothStartAsync()
 
     asyncStarted = true;
     k_thread_create(&bleThread, bleThreadStack, K_THREAD_STACK_SIZEOF(bleThreadStack), bleThreadEntry, nullptr, nullptr, nullptr,
-                    0, 0, K_NO_WAIT);
+                    K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
     k_thread_name_set(&bleThread, "nrf54_ble");
-    LOG_INF("BLE async start requested");
+    LOG_INF("BLE async start requested prio=%d", K_PRIO_PREEMPT(8));
 }
 
 void nrf54BluetoothSetEnabled(bool enable)
