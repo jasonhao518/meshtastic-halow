@@ -24,6 +24,7 @@ static struct bt_conn *currentConn;
 static bool btReady;
 static bool advertising;
 static bool appReady;
+static bool asyncStarted;
 static uint8_t fromRadioValue[meshtastic_FromRadio_size];
 static uint16_t fromRadioValueLen;
 static uint32_t fromNumValue;
@@ -187,6 +188,32 @@ BT_CONN_CB_DEFINE(connCallbacks) = {
     .connected = connected,
     .disconnected = disconnected,
 };
+
+static void bleThreadEntry(void *, void *, void *)
+{
+    LOG_INF("BLE worker waiting before init");
+    k_sleep(K_MSEC(1000));
+    LOG_INF("BLE worker starting init");
+    nrf54BluetoothSetEnabled(true);
+    LOG_INF("BLE worker init returned");
+}
+
+K_THREAD_STACK_DEFINE(bleThreadStack, 4096);
+static struct k_thread bleThread;
+
+void nrf54BluetoothStartAsync()
+{
+    if (asyncStarted) {
+        LOG_INF("BLE async start already requested");
+        return;
+    }
+
+    asyncStarted = true;
+    k_thread_create(&bleThread, bleThreadStack, K_THREAD_STACK_SIZEOF(bleThreadStack), bleThreadEntry, nullptr, nullptr, nullptr,
+                    5, 0, K_NO_WAIT);
+    k_thread_name_set(&bleThread, "nrf54_ble");
+    LOG_INF("BLE async start requested");
+}
 
 void nrf54BluetoothSetEnabled(bool enable)
 {

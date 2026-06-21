@@ -14,8 +14,8 @@ extern "C" void _fini(void) {}
 extern "C" int main(void)
 {
     LOG_INF("Meshtastic nRF54L15 full app starting");
-    LOG_INF("Starting BLE before Meshtastic setup");
-    nrf54BluetoothSetEnabled(true);
+    LOG_INF("Starting BLE worker before Meshtastic setup");
+    nrf54BluetoothStartAsync();
     LOG_INF("Entering Meshtastic setup");
     setup();
     LOG_INF("Meshtastic setup returned");
