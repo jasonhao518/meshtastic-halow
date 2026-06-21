@@ -273,7 +273,9 @@ void nrf54BluetoothSetEnabled(bool enable)
         }
 
         enablePending = true;
+        LOG_INF("Calling bt_enable");
         int err = bt_enable(btReadyCallback);
+        LOG_INF("bt_enable returned err=%d", err);
         if (err && err != -EALREADY) {
             LOG_ERR("bt_enable returned err=%d", err);
             enablePending = false;
@@ -309,6 +311,11 @@ void nrf54BluetoothMarkAppReady()
     if (!phoneApi) {
         phoneApi = new ZephyrBluetoothPhoneAPI();
     }
+    if (!asyncStarted) {
+        LOG_INF("BLE app ready; starting worker");
+        nrf54BluetoothStartAsync();
+        return;
+    }
     if (currentConn) {
         meshtastic::BluetoothStatus status(meshtastic::BluetoothStatus::ConnectionState::CONNECTED);
         bluetoothStatus->updateStatus(&status);
@@ -321,6 +328,11 @@ void nrf54BluetoothMarkAppReady()
         }
         nrf54BluetoothSetEnabled(true);
     }
+}
+
+bool nrf54BluetoothIsAppReady()
+{
+    return appReady;
 }
 
 bool nrf54BluetoothIsConnected()

@@ -362,7 +362,7 @@ void setup()
 #endif
     OLEDDISPLAY_GEOMETRY screen_geometry = GEOMETRY_128_64;
 
-#ifdef USE_SEGGER
+#if defined(USE_SEGGER) && !defined(ARCH_NRF54)
     auto mode = false ? SEGGER_RTT_MODE_BLOCK_IF_FIFO_FULL : SEGGER_RTT_MODE_NO_BLOCK_TRIM;
 #ifdef NRF52840_XXAA
     auto buflen = 4096; // this board has a fair amount of ram
@@ -372,9 +372,12 @@ void setup()
     SEGGER_RTT_ConfigUpBuffer(SEGGER_STDOUT_CH, NULL, NULL, buflen, mode);
 #endif
 
-#ifdef DEBUG_PORT
+#if defined(DEBUG_PORT) && !defined(ARCH_NRF54)
+    NRF54_SETUP_LOG("setup: consoleInit begin");
     consoleInit(); // Set serial baud rate and init our mesh console
     NRF54_SETUP_LOG("setup: consoleInit done");
+#elif defined(ARCH_NRF54)
+    NRF54_SETUP_LOG("setup: consoleInit skipped for Zephyr RTT");
 #endif
 
 #ifdef UNPHONE

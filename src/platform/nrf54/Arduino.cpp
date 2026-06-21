@@ -130,6 +130,10 @@ void tzset() {}
 
 void setBluetoothEnable(bool enable)
 {
+    if (!nrf54BluetoothIsAppReady()) {
+        printk("nrf54_ble: deferred setBluetoothEnable(%d) before app ready\n", enable ? 1 : 0);
+        return;
+    }
     nrf54BluetoothSetEnabled(enable);
 }
 
