@@ -145,6 +145,7 @@
 		reg = <0>;
 
 		spi-irq-gpios = <&gpio1 6 GPIO_ACTIVE_LOW>;
+		power-en-gpios = <&gpio2 0 GPIO_ACTIVE_HIGH>;
 		busy-gpios = <&gpio1 10 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>;
 		wakeup-gpios = <&gpio1 5 GPIO_ACTIVE_HIGH>;
 		resetn-gpios = <&gpio1 4 GPIO_ACTIVE_LOW>;
