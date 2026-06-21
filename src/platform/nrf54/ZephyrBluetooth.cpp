@@ -6,17 +6,20 @@
 #include "configuration.h"
 #include "main.h"
 #include "mesh/PhoneAPI.h"
+#include "target_specific.h"
 
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/uuid.h>
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util.h>
 
 #include <errno.h>
 #include <string.h>
+#include <string>
 
 LOG_MODULE_REGISTER(nrf54_ble, LOG_LEVEL_INF);
 
@@ -26,11 +29,14 @@ static bool advertising;
 static bool appReady;
 static bool asyncStarted;
 static bool enablePending;
+static bool authRegistered;
 static constexpr size_t bleThreadStackSize = 12288;
+static constexpr unsigned int fixedPasskey = 123456;
 static uint8_t fromRadioValue[meshtastic_FromRadio_size];
 static uint16_t fromRadioValueLen;
 static uint32_t fromNumValue;
 static uint8_t batteryLevel = 100;
+static char advertisedName[20];
 
 class ZephyrBluetoothPhoneAPI : public PhoneAPI
 {
@@ -55,6 +61,10 @@ static struct bt_uuid_128 toRadioUuid = BT_UUID_INIT_128(BT_UUID_TORADIO_VAL);
 static struct bt_uuid_128 fromRadioUuid = BT_UUID_INIT_128(BT_UUID_FROMRADIO_VAL);
 static struct bt_uuid_128 fromNumUuid = BT_UUID_INIT_128(BT_UUID_FROMNUM_VAL);
 static struct bt_uuid_128 logRadioUuid = BT_UUID_INIT_128(BT_UUID_LOGRADIO_VAL);
+
+static constexpr bt_gatt_perm meshReadPerm = static_cast<bt_gatt_perm>(BT_GATT_PERM_READ | BT_GATT_PERM_READ_ENCRYPT);
+static constexpr bt_gatt_perm meshWritePerm = static_cast<bt_gatt_perm>(BT_GATT_PERM_WRITE | BT_GATT_PERM_WRITE_ENCRYPT);
+static constexpr bt_gatt_perm meshCccPerm = static_cast<bt_gatt_perm>(meshReadPerm | meshWritePerm);
 
 static ssize_t readFromRadio(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
 {
@@ -106,16 +116,14 @@ static ssize_t readBattery(struct bt_conn *conn, const struct bt_gatt_attr *attr
 }
 
 BT_GATT_SERVICE_DEFINE(meshtasticSvc, BT_GATT_PRIMARY_SERVICE(&meshSvcUuid),
-                       BT_GATT_CHARACTERISTIC(&toRadioUuid.uuid, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, nullptr, writeToRadio,
-                                              nullptr),
-                       BT_GATT_CHARACTERISTIC(&fromRadioUuid.uuid, BT_GATT_CHRC_READ, BT_GATT_PERM_READ, readFromRadio, nullptr,
-                                              nullptr),
-                       BT_GATT_CHARACTERISTIC(&fromNumUuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
+                       BT_GATT_CHARACTERISTIC(&toRadioUuid.uuid, BT_GATT_CHRC_WRITE, meshWritePerm, nullptr, writeToRadio, nullptr),
+                       BT_GATT_CHARACTERISTIC(&fromRadioUuid.uuid, BT_GATT_CHRC_READ, meshReadPerm, readFromRadio, nullptr, nullptr),
+                       BT_GATT_CHARACTERISTIC(&fromNumUuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, meshReadPerm,
                                               readFromNum, nullptr, &fromNumValue),
-                       BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-                       BT_GATT_CHARACTERISTIC(&logRadioUuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
+                       BT_GATT_CCC(nullptr, meshCccPerm),
+                       BT_GATT_CHARACTERISTIC(&logRadioUuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, meshReadPerm,
                                               readLogRadio, nullptr, nullptr),
-                       BT_GATT_CCC(nullptr, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE));
+                       BT_GATT_CCC(nullptr, meshCccPerm));
 
 BT_GATT_SERVICE_DEFINE(batterySvc, BT_GATT_PRIMARY_SERVICE(BT_UUID_BAS),
                        BT_GATT_CHARACTERISTIC(BT_UUID_BAS_BATTERY_LEVEL, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
@@ -150,6 +158,24 @@ static const struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_MESHTASTIC_SERVICE_VAL),
 };
 
+static void restartAdvertisingWorkHandler(struct k_work *work);
+K_WORK_DELAYABLE_DEFINE(restartAdvertisingWork, restartAdvertisingWorkHandler);
+
+static const char *getAdvertisedName()
+{
+    if (appReady) {
+        const char *name = getDeviceName();
+        if (name && name[0] && name[0] != '_') {
+            return name;
+        }
+    }
+
+    uint8_t dmac[6];
+    getMacAddr(dmac);
+    snprintf(advertisedName, sizeof(advertisedName), "Meshtastic_%02x%02x", dmac[4], dmac[5]);
+    return advertisedName;
+}
+
 static void startAdvertising()
 {
     if (!btReady || advertising || currentConn) {
@@ -157,7 +183,11 @@ static void startAdvertising()
         return;
     }
 
-    const char *name = appReady ? getDeviceName() : "Meshtastic";
+    const char *name = getAdvertisedName();
+    int nameErr = bt_set_name(name);
+    if (nameErr) {
+        LOG_WRN("BLE device name set failed err=%d name=%s", nameErr, name);
+    }
     struct bt_data sd[] = {
         BT_DATA(BT_DATA_NAME_COMPLETE, name, static_cast<uint8_t>(strlen(name))),
     };
@@ -170,6 +200,89 @@ static void startAdvertising()
     LOG_INF("BLE advertising as %s", name);
 }
 
+static void scheduleAdvertisingRestart(k_timeout_t delay)
+{
+    if (!btReady || currentConn || !appReady) {
+        LOG_INF("BLE advertise restart skipped ready=%u connected=%u appReady=%u", btReady, currentConn != nullptr, appReady);
+        return;
+    }
+
+    advertising = false;
+    int err = k_work_reschedule(&restartAdvertisingWork, delay);
+    LOG_INF("BLE advertising restart scheduled err=%d", err);
+}
+
+static void restartAdvertisingWorkHandler(struct k_work *work)
+{
+    (void)work;
+    startAdvertising();
+}
+
+static void pairingConfirm(struct bt_conn *conn)
+{
+    LOG_INF("BLE pairing confirm");
+    bt_conn_auth_pairing_confirm(conn);
+}
+
+static void passkeyDisplay(struct bt_conn *conn, unsigned int passkey)
+{
+    LOG_INF("BLE pairing passkey %06u", passkey);
+    powerFSM.trigger(EVENT_BLUETOOTH_PAIR);
+    meshtastic::BluetoothStatus status(std::to_string(passkey));
+    bluetoothStatus->updateStatus(&status);
+}
+
+static void authCancel(struct bt_conn *conn)
+{
+    LOG_WRN("BLE pairing cancelled");
+}
+
+static void pairingComplete(struct bt_conn *conn, bool bonded)
+{
+    LOG_INF("BLE pairing complete bonded=%u", bonded);
+    meshtastic::BluetoothStatus status(meshtastic::BluetoothStatus::ConnectionState::CONNECTED);
+    bluetoothStatus->updateStatus(&status);
+}
+
+static void pairingFailed(struct bt_conn *conn, enum bt_security_err reason)
+{
+    LOG_WRN("BLE pairing failed reason=%u", reason);
+    meshtastic::BluetoothStatus status(meshtastic::BluetoothStatus::ConnectionState::DISCONNECTED);
+    bluetoothStatus->updateStatus(&status);
+}
+
+static struct bt_conn_auth_cb authCallbacks;
+static struct bt_conn_auth_info_cb authInfoCallbacks;
+
+static void configureSecurity()
+{
+    if (authRegistered) {
+        return;
+    }
+
+    authCallbacks.passkey_display = passkeyDisplay;
+    authCallbacks.cancel = authCancel;
+    authCallbacks.pairing_confirm = pairingConfirm;
+    authInfoCallbacks.pairing_complete = pairingComplete;
+    authInfoCallbacks.pairing_failed = pairingFailed;
+
+    int err = bt_conn_auth_cb_register(&authCallbacks);
+    if (err) {
+        LOG_WRN("BLE auth callback register failed err=%d", err);
+    }
+    err = bt_conn_auth_info_cb_register(&authInfoCallbacks);
+    if (err) {
+        LOG_WRN("BLE auth info callback register failed err=%d", err);
+    }
+    err = bt_passkey_set(fixedPasskey);
+    if (err) {
+        LOG_WRN("BLE fixed passkey set failed err=%d", err);
+    } else {
+        LOG_INF("BLE fixed passkey set to %06u", fixedPasskey);
+    }
+    authRegistered = true;
+}
+
 static void btReadyCallback(int err)
 {
     enablePending = false;
@@ -180,6 +293,7 @@ static void btReadyCallback(int err)
 
     btReady = true;
     LOG_INF("Bluetooth initialized");
+    configureSecurity();
     startAdvertising();
 }
 
@@ -187,10 +301,19 @@ static void connected(struct bt_conn *conn, uint8_t err)
 {
     if (err) {
         LOG_WRN("BLE connect failed err=%u", err);
+        scheduleAdvertisingRestart(K_MSEC(500));
         return;
     }
     currentConn = bt_conn_ref(conn);
-    LOG_INF("BLE connected appReady=%u", appReady);
+    advertising = false;
+    struct bt_conn_info info;
+    int infoErr = bt_conn_get_info(conn, &info);
+    if (!infoErr && info.type == BT_CONN_TYPE_LE) {
+        LOG_INF("BLE connected appReady=%u interval=%u latency=%u timeout=%u", appReady, info.le.interval, info.le.latency,
+                info.le.timeout);
+    } else {
+        LOG_INF("BLE connected appReady=%u infoErr=%d", appReady, infoErr);
+    }
     if (appReady && !phoneApi) {
         phoneApi = new ZephyrBluetoothPhoneAPI();
     }
@@ -198,6 +321,8 @@ static void connected(struct bt_conn *conn, uint8_t err)
         meshtastic::BluetoothStatus status(meshtastic::BluetoothStatus::ConnectionState::CONNECTED);
         bluetoothStatus->updateStatus(&status);
         powerFSM.trigger(EVENT_BLUETOOTH_PAIR);
+        int secErr = bt_conn_set_security(conn, BT_SECURITY_L3);
+        LOG_INF("BLE security requested err=%d", secErr);
     }
 }
 
@@ -215,8 +340,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
         meshtastic::BluetoothStatus status(meshtastic::BluetoothStatus::ConnectionState::DISCONNECTED);
         bluetoothStatus->updateStatus(&status);
     }
-    advertising = false;
-    nrf54BluetoothSetEnabled(true);
+    scheduleAdvertisingRestart(K_MSEC(500));
 }
 
 BT_CONN_CB_DEFINE(connCallbacks) = {
