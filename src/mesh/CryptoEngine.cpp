@@ -297,6 +297,6 @@ void CryptoEngine::initNonce(uint32_t fromNode, uint64_t packetId, uint32_t extr
     if (extraNonce)
         memcpy(nonce + sizeof(uint32_t), &extraNonce, sizeof(uint32_t));
 }
-#ifndef HAS_CUSTOM_CRYPTO_ENGINE
+#if !defined(HAS_CUSTOM_CRYPTO_ENGINE) || !HAS_CUSTOM_CRYPTO_ENGINE
 CryptoEngine *crypto = new CryptoEngine;
 #endif
