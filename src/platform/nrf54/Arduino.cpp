@@ -2,7 +2,7 @@
 
 #include <stdarg.h>
 #include <string.h>
-#include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/hwinfo.h>
 #include <zephyr/random/random.h>
 #include <zephyr/sys/printk.h>
 
@@ -126,6 +126,48 @@ int setenv(const char *name, const char *value, int overwrite)
 }
 
 void tzset() {}
+
+void setBluetoothEnable(bool enable)
+{
+    (void)enable;
+}
+
+void updateBatteryLevel(uint8_t level)
+{
+    (void)level;
+}
+
+void getMacAddr(uint8_t *dmac)
+{
+    if (!dmac) {
+        return;
+    }
+
+    uint8_t deviceId[16] = {0};
+    ssize_t len = hwinfo_get_device_id(deviceId, sizeof(deviceId));
+    if (len <= 0) {
+        uint32_t fallback = sys_rand32_get();
+        memset(dmac, 0, 6);
+        memcpy(dmac + 2, &fallback, sizeof(fallback));
+        return;
+    }
+
+    memset(dmac, 0, 6);
+    size_t copyLen = (size_t)len < 6 ? (size_t)len : 6;
+    memcpy(dmac + (6 - copyLen), deviceId, copyLen);
+    dmac[0] |= 0x02;  // locally administered
+    dmac[0] &= ~0x01; // unicast
+}
+
+void cpuDeepSleep(uint32_t msecToWake)
+{
+    k_sleep(K_MSEC(msecToWake));
+}
+
+bool shouldWakeOnReceivedMessage()
+{
+    return false;
+}
 
 size_t Print::write(uint8_t c)
 {
