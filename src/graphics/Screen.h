@@ -4,7 +4,6 @@
 
 #include "detect/ScanI2C.h"
 #include "mesh/generated/meshtastic/config.pb.h"
-#include <OLEDDisplay.h>
 #include <functional>
 #include <string>
 #include <vector>
@@ -30,6 +29,7 @@ bool shouldWakeOnReceivedMessage();
 
 #if !HAS_SCREEN
 #include "power.h"
+enum OLEDDISPLAY_GEOMETRY { GEOMETRY_128_64 };
 namespace graphics
 {
 // Noop class for boards without screen.
@@ -64,6 +64,7 @@ class Screen
 #else
 #include <cstring>
 
+#include <OLEDDisplay.h>
 #include <OLEDDisplayUi.h>
 
 #include "../configuration.h"

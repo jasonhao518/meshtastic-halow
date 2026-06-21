@@ -1,6 +1,6 @@
 #pragma once
 
-#define HAS_BLUETOOTH 0
+#define HAS_BLUETOOTH 1
 #define HAS_SCREEN 0
 #define HAS_WIRE 0
 #define HAS_GPS 0
