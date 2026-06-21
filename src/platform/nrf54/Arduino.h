@@ -4,12 +4,71 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <string>
 #include <strings.h>
+#include <type_traits>
+#include <utility>
 #include <zephyr/kernel.h>
 
-using String = std::string;
+class String : public std::string {
+  public:
+    using std::string::string;
+
+    String() = default;
+    String(const std::string &s) : std::string(s) {}
+    String(std::string &&s) : std::string(std::move(s)) {}
+    String(const char *s) : std::string(s ? s : "") {}
+    String(char c) : std::string(1, c) {}
+
+    template <typename T, typename = typename std::enable_if<std::is_integral<T>::value && !std::is_same<T, char>::value>::type>
+    String(T value) : std::string(formatIntegral(value))
+    {
+    }
+
+    String(float value, unsigned int decimals) : std::string(formatFloat(value, decimals)) {}
+    String(double value, unsigned int decimals) : std::string(formatFloat(value, decimals)) {}
+
+    bool endsWith(const char *suffix) const
+    {
+        if (!suffix) {
+            return false;
+        }
+        size_t suffixLen = strlen(suffix);
+        return size() >= suffixLen && compare(size() - suffixLen, suffixLen, suffix) == 0;
+    }
+
+    String substring(size_t begin) const { return begin < size() ? substr(begin) : String(); }
+    String substring(size_t begin, size_t end) const
+    {
+        if (begin >= size() || end <= begin) {
+            return String();
+        }
+        return substr(begin, end - begin);
+    }
+
+  private:
+    static std::string formatFloat(double value, unsigned int decimals)
+    {
+        char format[12];
+        char buffer[40];
+        snprintf(format, sizeof(format), "%%.%uf", decimals);
+        snprintf(buffer, sizeof(buffer), format, value);
+        return std::string(buffer);
+    }
+
+    template <typename T> static std::string formatIntegral(T value)
+    {
+        char buffer[32];
+        if (std::is_signed<T>::value) {
+            snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
+        } else {
+            snprintf(buffer, sizeof(buffer), "%llu", (unsigned long long)value);
+        }
+        return std::string(buffer);
+    }
+};
 using uint = unsigned int;
 using std::max;
 using std::min;

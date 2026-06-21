@@ -2,13 +2,13 @@
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "configuration.h"
-#include "graphics/SharedUIDisplay.h"
-#include "graphics/draw/CompassRenderer.h"
 
 #if HAS_SCREEN
+#include "graphics/SharedUIDisplay.h"
 #include "gps/RTC.h"
 #include "graphics/Screen.h"
 #include "graphics/TimeFormatters.h"
+#include "graphics/draw/CompassRenderer.h"
 #include "graphics/draw/NodeListRenderer.h"
 #include "main.h"
 #endif

@@ -1,9 +1,6 @@
 #pragma once
 #include "ProtobufModule.h"
 #include "concurrency/OSThread.h"
-#include "graphics/Screen.h"
-#include "graphics/SharedUIDisplay.h"
-#include "input/InputBroker.h"
 #if HAS_SCREEN
 #include "OLEDDisplayUi.h"
 #endif

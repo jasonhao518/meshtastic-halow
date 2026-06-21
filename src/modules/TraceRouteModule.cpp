@@ -1,14 +1,18 @@
 #include "TraceRouteModule.h"
 #include "MeshService.h"
 #include "NodeDB.h"
+#if HAS_SCREEN
 #include "graphics/Screen.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
+#endif
 #include "mesh/Router.h"
 #include "meshUtils.h"
 #include <vector>
 
+#if HAS_SCREEN
 extern graphics::Screen *screen;
+#endif
 
 TraceRouteModule *traceRouteModule;
 
@@ -848,15 +852,16 @@ int32_t TraceRouteModule::runOnce()
             bannerText = newBannerText;
             LOG_INFO("TraceRoute cooldown: updating banner to %s", bannerText.c_str());
 
-            // Force flash UI
             requestFocus();
             UIFrameEvent e;
             e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
             notifyObservers(&e);
 
+#if HAS_SCREEN
             if (screen) {
                 screen->forceDisplay();
             }
+#endif
 
             return 1000;
         } else {
