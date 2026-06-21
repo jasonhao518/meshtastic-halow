@@ -1,6 +1,15 @@
 #pragma once
 
+#include "configuration.h"
+
+#if HAS_SCREEN
 #include <OLEDDisplay.h>
+#else
+class OLEDDisplay;
+#ifndef FONT_HEIGHT_SMALL
+#define FONT_HEIGHT_SMALL 10
+#endif
+#endif
 #include <stdint.h>
 #include <string>
 

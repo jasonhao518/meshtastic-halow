@@ -104,6 +104,14 @@ long random(long min, long max)
     return min + random(max - min);
 }
 
+long map(long value, long fromLow, long fromHigh, long toLow, long toHigh)
+{
+    if (fromHigh == fromLow) {
+        return toLow;
+    }
+    return (value - fromLow) * (toHigh - toLow) / (fromHigh - fromLow) + toLow;
+}
+
 int setenv(const char *name, const char *value, int overwrite)
 {
     (void)name;
@@ -126,6 +134,11 @@ size_t Print::write(const uint8_t *buffer, size_t size)
         write(buffer[i]);
     }
     return size;
+}
+
+size_t Print::write(const char *buffer, size_t size)
+{
+    return write(reinterpret_cast<const uint8_t *>(buffer), size);
 }
 
 size_t Print::write(const char *str)
@@ -153,7 +166,17 @@ int Print::println(const char *str)
     return rc + 1;
 }
 
+int Print::println(const String &str)
+{
+    return println(str.c_str());
+}
+
 int Print::print(const char *str)
 {
     return (int)write(str);
+}
+
+int Print::print(const String &str)
+{
+    return print(str.c_str());
 }

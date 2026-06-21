@@ -4,12 +4,15 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <zephyr/kernel.h>
 
 using String = std::string;
 using std::max;
 using std::min;
+using std::lround;
+using std::round;
 using byte = uint8_t;
 
 class __FlashStringHelper;
@@ -56,6 +59,7 @@ void detachInterrupt(uint32_t pin);
 uint32_t digitalPinToInterrupt(uint32_t pin);
 long random(long max);
 long random(long min, long max);
+long map(long value, long fromLow, long fromHigh, long toLow, long toHigh);
 int setenv(const char *name, const char *value, int overwrite);
 void tzset();
 
@@ -64,13 +68,21 @@ class Print {
     virtual ~Print() = default;
     virtual size_t write(uint8_t c);
     virtual size_t write(const uint8_t *buffer, size_t size);
+    size_t write(const char *buffer, size_t size);
     size_t write(const char *str);
     int printf(const char *format, ...);
     int println(const char *str = "");
+    int println(const String &str);
     int print(const char *str);
+    int print(const String &str);
 };
 
-class Stream : public Print {};
+class Stream : public Print {
+  public:
+    virtual int available() { return 0; }
+    virtual int read() { return -1; }
+    virtual void flush() {}
+};
 
 class Nrf54Serial : public Stream {
   public:
