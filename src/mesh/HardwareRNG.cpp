@@ -6,7 +6,7 @@
 
 #include "configuration.h"
 
-#if HAS_RADIO
+#if HAS_RADIO && !MESHTASTIC_EXCLUDE_LORA
 #include "RadioLibInterface.h"
 #endif
 
@@ -44,7 +44,7 @@ void fillWithRandomDevice(uint8_t *buffer, size_t length)
     }
 }
 
-#if HAS_RADIO
+#if HAS_RADIO && !MESHTASTIC_EXCLUDE_LORA
 bool mixWithLoRaEntropy(uint8_t *buffer, size_t length)
 {
     // Only attempt to pull entropy from the modem if it is initialized and exposes the helper.
@@ -147,7 +147,7 @@ bool fill(uint8_t *buffer, size_t length, bool useRadioEntropy)
         filled = true;
     }
 
-#if HAS_RADIO
+#if HAS_RADIO && !MESHTASTIC_EXCLUDE_LORA
     if (useRadioEntropy) {
         // Best-effort: if the radio is active and can provide modem entropy, XOR it over the
         // buffer to improve overall quality. We consider the filling a success if either a

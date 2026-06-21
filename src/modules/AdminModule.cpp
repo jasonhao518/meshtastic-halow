@@ -26,7 +26,9 @@
 #include "MeshRadio.h"
 #include "RadioInterface.h"
 #include "TypeConversions.h"
+#if !MESHTASTIC_EXCLUDE_LORA
 #include "mesh/RadioLibInterface.h"
+#endif
 
 #if !MESHTASTIC_EXCLUDE_MQTT
 #include "mqtt/MQTT.h"
@@ -218,11 +220,13 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
 
         // Hardware supports 2.4 GHz — apply the config.
         // Fail closed: null instance is treated as incapable.
+#if !MESHTASTIC_EXCLUDE_LORA
         if (RadioLibInterface::instance && RadioLibInterface::instance->wideLora()) {
             LOG_DEBUG("LORA_24 requested, radio hardware supports 2.4 GHz, applying");
             handleSetConfig(r->set_config, fromOthers);
             break;
         }
+#endif
 
         LOG_WARN("Radio hardware does not support 2.4 GHz; rejecting LORA_24 region");
         myReply = allocErrorResponse(meshtastic_Routing_Error_BAD_REQUEST, &mp);

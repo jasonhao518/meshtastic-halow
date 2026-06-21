@@ -1,20 +1,26 @@
 #include "RadioInterface.h"
 #include "Channels.h"
+#include "configuration.h"
 #include "DisplayFormatters.h"
+#if !MESHTASTIC_EXCLUDE_LORA
 #include "LLCC68Interface.h"
 #include "LR1110Interface.h"
 #include "LR1120Interface.h"
 #include "LR1121Interface.h"
 #include "LR2021Interface.h"
+#endif
 #include "MeshRadio.h"
 #include "MeshService.h"
 #include "NodeDB.h"
+#if !MESHTASTIC_EXCLUDE_LORA
 #include "RF95Interface.h"
+#endif
 #include "Router.h"
+#if !MESHTASTIC_EXCLUDE_LORA
 #include "SX1262Interface.h"
 #include "SX1268Interface.h"
 #include "SX1280Interface.h"
-#include "configuration.h"
+#endif
 #include "detect/LoRaRadioType.h"
 #include "main.h"
 #include "meshUtils.h" // for pow_of_2
@@ -249,15 +255,18 @@ static uint8_t bytes[MAX_LORA_PAYLOAD_LEN + 1];
 // Global LoRa radio type
 LoRaRadioType radioType = NO_RADIO;
 
+#if !MESHTASTIC_EXCLUDE_LORA
 extern RadioLibHal *RadioLibHAL;
 #if defined(HW_SPI1_DEVICE) && defined(ARCH_ESP32)
 extern SPIClass SPI1;
+#endif
 #endif
 
 std::unique_ptr<RadioInterface> initLoRa()
 {
     std::unique_ptr<RadioInterface> rIf = nullptr;
 
+#if !MESHTASTIC_EXCLUDE_LORA
 #if ARCH_PORTDUINO
     SPISettings loraSpiSettings(portduino_config.spiSpeed, MSBFIRST, SPI_MODE0);
 #else
@@ -524,6 +533,7 @@ std::unique_ptr<RadioInterface> initLoRa()
             rebootAtMsec = millis() + 5000;
         }
     }
+#endif
 
 #ifdef USE_HALOW_RADIO
     // HaLow is a RadioInterface implementation for variants where the RF

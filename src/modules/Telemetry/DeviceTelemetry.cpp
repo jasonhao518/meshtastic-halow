@@ -5,10 +5,12 @@
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "RTC.h"
+#include "configuration.h"
+#if !MESHTASTIC_EXCLUDE_LORA
 #include "RadioLibInterface.h"
+#endif
 #include "Router.h"
 #include "TransmitHistory.h"
-#include "configuration.h"
 #include "main.h"
 #include "memGet.h"
 #include <meshUtils.h>
@@ -122,6 +124,7 @@ meshtastic_Telemetry DeviceTelemetryModule::getLocalStatsTelemetry()
     telemetry.variant.local_stats.air_util_tx = airTime->utilizationTXPercent();
     telemetry.variant.local_stats.num_online_nodes = numOnlineNodes;
     telemetry.variant.local_stats.num_total_nodes = nodeDB->getNumMeshNodes();
+#if !MESHTASTIC_EXCLUDE_LORA
     if (RadioLibInterface::instance) {
         telemetry.variant.local_stats.num_packets_tx = RadioLibInterface::instance->txGood;
         telemetry.variant.local_stats.num_packets_rx = RadioLibInterface::instance->rxGood + RadioLibInterface::instance->rxBad;
@@ -129,6 +132,7 @@ meshtastic_Telemetry DeviceTelemetryModule::getLocalStatsTelemetry()
         telemetry.variant.local_stats.num_tx_relay = RadioLibInterface::instance->txRelay;
         telemetry.variant.local_stats.num_tx_dropped = RadioLibInterface::instance->txDrop;
     }
+#endif
 #ifdef ARCH_PORTDUINO
     if (SimRadio::instance) {
         telemetry.variant.local_stats.num_packets_tx = SimRadio::instance->txGood;

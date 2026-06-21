@@ -20,6 +20,9 @@
 extern "C" {
 #include "mmpkt.h"
 #include "mmhal.h"
+#ifdef USE_MM_IOT_ZEPHYR
+#include "mmhal_wlan.h"
+#endif
 #include "mmregdb.h"
 #include "mmwlan.h"
 }
@@ -138,7 +141,7 @@ static void logHaLowMeshPacket(const char *direction, const uint8_t *buffer, siz
            h->next_hop, h->relay_node, rssiText, (unsigned)hexLen, hex, len > hexLen ? "..." : "");
 }
 
-#ifdef USE_MM_IOT_ESP32
+#ifdef MESHTASTIC_USE_MM_IOT_HALOW
 static const char *staEventToStr(enum mmwlan_sta_event evt)
 {
     switch (evt) {
@@ -166,7 +169,7 @@ static const char *staEventToStr(enum mmwlan_sta_event evt)
 
 HaLowInterface::HaLowInterface() : concurrency::OSThread("HaLow") {}
 
-#ifdef USE_MM_IOT_ESP32
+#ifdef MESHTASTIC_USE_MM_IOT_HALOW
 void HaLowInterface::linkStateTrampoline(enum mmwlan_link_state link_state, void *arg)
 {
     HaLowInterface *self = static_cast<HaLowInterface *>(arg);
@@ -240,11 +243,12 @@ bool HaLowInterface::init()
     printf("HaLow: init entry\n");
     RadioInterface::init();
 
-#ifdef USE_MM_IOT_ESP32
+#ifdef MESHTASTIC_USE_MM_IOT_HALOW
     if (!loadMeshProfile()) {
         return false;
     }
 
+#ifdef USE_MM_IOT_ESP32
     gpio_config_t irqPin = {};
     irqPin.pin_bit_mask = (1ULL << CONFIG_MM_SPI_IRQ) | (1ULL << CONFIG_MM_BUSY);
     irqPin.mode = GPIO_MODE_INPUT;
@@ -257,12 +261,20 @@ bool HaLowInterface::init()
     REG_WRITE(GPIO_STATUS_W1TC_REG, UINT32_MAX);
     REG_WRITE(GPIO_STATUS1_W1TC_REG, UINT32_MAX);
     printf("HaLow: cleared pending Morse GPIO interrupts\n");
+#endif
 
-    LOG_INFO("HaLow: mmhal_init()");
+    LOG_INFO("HaLow: mmhal init");
+#ifdef USE_MM_IOT_ZEPHYR
+    printf("HaLow: calling mmhal_wlan_init\n");
+    fflush(stdout);
+    mmhal_wlan_init();
+    printf("HaLow: mmhal_wlan_init complete\n");
+#else
     printf("HaLow: calling mmhal_init\n");
     fflush(stdout);
     mmhal_init();
     printf("HaLow: mmhal_init complete\n");
+#endif
     fflush(stdout);
 
     LOG_INFO("HaLow: mmwlan_init()");
@@ -305,14 +317,14 @@ bool HaLowInterface::init()
 
     return startMeshStation();
 #else
-    LOG_WARN("HaLow: built without USE_MM_IOT_ESP32, transport is a stub");
+    LOG_WARN("HaLow: built without mm-iot backend, transport is a stub");
     return false;
 #endif
 }
 
 bool HaLowInterface::reconfigure()
 {
-#ifdef USE_MM_IOT_ESP32
+#ifdef MESHTASTIC_USE_MM_IOT_HALOW
     if (!wlanReady) {
         return false;
     }
@@ -337,7 +349,7 @@ bool HaLowInterface::reconfigure()
 
 bool HaLowInterface::sleep()
 {
-#ifdef USE_MM_IOT_ESP32
+#ifdef MESHTASTIC_USE_MM_IOT_HALOW
     if (meshEnabled) {
         mmwlan_sta_disable();
         meshEnabled = false;
@@ -583,7 +595,7 @@ void HaLowInterface::onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int
            user.short_name, user.long_name, rssi);
 }
 
-#ifdef USE_MM_IOT_ESP32
+#ifdef MESHTASTIC_USE_MM_IOT_HALOW
 bool HaLowInterface::applyChannelList()
 {
     const struct mmwlan_s1g_channel_list *channel_list = mmwlan_lookup_regulatory_domain(get_regulatory_db(), countryCode);
@@ -676,7 +688,7 @@ ErrorCode HaLowInterface::send(meshtastic_MeshPacket *p)
         return ERRNO_UNKNOWN;
     }
 
-#ifdef USE_MM_IOT_ESP32
+#ifdef MESHTASTIC_USE_MM_IOT_HALOW
     if (!meshEnabled || disabled || !config.lora.tx_enabled) {
         LOG_WARN("HaLow: drop tx id=0x%08x mesh=%u disabled=%u tx_enabled=%u", p->id, meshEnabled ? 1 : 0, disabled ? 1 : 0,
                  config.lora.tx_enabled ? 1 : 0);
@@ -761,7 +773,7 @@ uint32_t HaLowInterface::getPacketTime(uint32_t totalPacketLen, bool /*received*
 
 bool HaLowInterface::requestLocalMeshScan()
 {
-#ifdef USE_MM_IOT_ESP32
+#ifdef MESHTASTIC_USE_MM_IOT_HALOW
     LOG_INFO("HaLow: local mesh scan requested by client");
     printf("HaLow: local mesh scan requested by client\n");
     return startMeshInfoRequest();
@@ -772,7 +784,7 @@ bool HaLowInterface::requestLocalMeshScan()
 
 int32_t HaLowInterface::runOnce()
 {
-#ifdef USE_MM_IOT_ESP32
+#ifdef MESHTASTIC_USE_MM_IOT_HALOW
     if (!Throttle::isWithinTimespanMs(lastMeshStatusLogMs, MESH_STATUS_LOG_INTERVAL_MS)) {
         lastMeshStatusLogMs = millis();
         LOG_INFO("HaLow: mesh status beaconing=%u scan_in_progress=%u peer_seen=%u last_scan_age=%lu last_info_age=%lu",
@@ -804,7 +816,7 @@ int32_t HaLowInterface::runOnce()
 
 bool HaLowInterface::startMeshInfoRequest()
 {
-#ifdef USE_MM_IOT_ESP32
+#ifdef MESHTASTIC_USE_MM_IOT_HALOW
     if (!meshEnabled) {
         LOG_WARN("HaLow: mesh info request skipped, mesh not enabled");
         printf("HaLow: mesh info request skipped, mesh not enabled\n");
@@ -865,7 +877,7 @@ bool HaLowInterface::startMeshInfoRequest()
 #endif
 }
 
-#ifdef USE_MM_IOT_ESP32
+#ifdef MESHTASTIC_USE_MM_IOT_HALOW
 void HaLowInterface::onStaEvent(const struct mmwlan_sta_event_cb_args *sta_event)
 {
     if (!sta_event) {

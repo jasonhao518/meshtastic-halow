@@ -7,7 +7,9 @@
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "PowerMon.h"
+#if !MESHTASTIC_EXCLUDE_LORA
 #include "RadioLibInterface.h"
+#endif
 #include "ReliableRouter.h"
 #include "TransmitHistory.h"
 #include "airtime.h"
@@ -255,7 +257,9 @@ uint32_t timeLastPowered = 0;
 static OSThread *powerFSMthread;
 AmbientLightingThread *ambientLightingThread;
 
+#if !MESHTASTIC_EXCLUDE_LORA
 RadioLibHal *RadioLibHAL = NULL;
+#endif
 
 /**
  * Some platforms (nrf52) might provide an alterate version that suppresses calling delay from sleep.
@@ -1179,6 +1183,7 @@ void loop()
 #endif
     power->powerCommandsCheck();
 
+#if !MESHTASTIC_EXCLUDE_LORA
     if (RadioLibInterface::instance != nullptr) {
         static uint32_t lastRadioMissedIrqPoll;
         if (!Throttle::isWithinTimespanMs(lastRadioMissedIrqPoll, 1000)) {
@@ -1193,6 +1198,7 @@ void loop()
             RadioLibInterface::instance->resetAGC();
         }
     }
+#endif
 
 #ifdef DEBUG_STACK
     static uint32_t lastPrint = 0;

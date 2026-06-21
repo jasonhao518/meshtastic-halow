@@ -6,7 +6,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifdef USE_MM_IOT_ESP32
+#if defined(USE_MM_IOT_ESP32) || defined(USE_MM_IOT_ZEPHYR)
+#define MESHTASTIC_USE_MM_IOT_HALOW 1
+#endif
+
+#ifdef MESHTASTIC_USE_MM_IOT_HALOW
 extern "C" {
 #include "mmwlan.h"
 }
@@ -89,7 +93,7 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
     bool startMeshInfoRequest();
     bool loadMeshProfile();
 
-#ifdef USE_MM_IOT_ESP32
+#ifdef MESHTASTIC_USE_MM_IOT_HALOW
     bool applyChannelList();
     bool startMeshStation();
 
