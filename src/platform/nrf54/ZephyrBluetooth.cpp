@@ -25,6 +25,8 @@ static bool btReady;
 static bool advertising;
 static bool appReady;
 static bool asyncStarted;
+static bool enablePending;
+static constexpr size_t bleThreadStackSize = 12288;
 static uint8_t fromRadioValue[meshtastic_FromRadio_size];
 static uint16_t fromRadioValueLen;
 static uint32_t fromNumValue;
@@ -148,6 +150,39 @@ static const struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_MESHTASTIC_SERVICE_VAL),
 };
 
+static void startAdvertising()
+{
+    if (!btReady || advertising || currentConn) {
+        LOG_INF("BLE advertise skipped ready=%u advertising=%u connected=%u", btReady, advertising, currentConn != nullptr);
+        return;
+    }
+
+    const char *name = appReady ? getDeviceName() : "Meshtastic";
+    struct bt_data sd[] = {
+        BT_DATA(BT_DATA_NAME_COMPLETE, name, static_cast<uint8_t>(strlen(name))),
+    };
+    int err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+    if (err) {
+        LOG_ERR("BLE advertising start failed err=%d", err);
+        return;
+    }
+    advertising = true;
+    LOG_INF("BLE advertising as %s", name);
+}
+
+static void btReadyCallback(int err)
+{
+    enablePending = false;
+    if (err) {
+        LOG_ERR("bt_enable callback err=%d", err);
+        return;
+    }
+
+    btReady = true;
+    LOG_INF("Bluetooth initialized");
+    startAdvertising();
+}
+
 static void connected(struct bt_conn *conn, uint8_t err)
 {
     if (err) {
@@ -191,14 +226,12 @@ BT_CONN_CB_DEFINE(connCallbacks) = {
 
 static void bleThreadEntry(void *, void *, void *)
 {
-    LOG_INF("BLE worker waiting before init");
-    k_sleep(K_MSEC(1000));
-    LOG_INF("BLE worker starting init");
+    LOG_INF("BLE worker starting init stack=%u", bleThreadStackSize);
     nrf54BluetoothSetEnabled(true);
     LOG_INF("BLE worker init returned");
 }
 
-K_THREAD_STACK_DEFINE(bleThreadStack, 4096);
+K_THREAD_STACK_DEFINE(bleThreadStack, bleThreadStackSize);
 static struct k_thread bleThread;
 
 void nrf54BluetoothStartAsync()
@@ -210,7 +243,7 @@ void nrf54BluetoothStartAsync()
 
     asyncStarted = true;
     k_thread_create(&bleThread, bleThreadStack, K_THREAD_STACK_SIZEOF(bleThreadStack), bleThreadEntry, nullptr, nullptr, nullptr,
-                    5, 0, K_NO_WAIT);
+                    0, 0, K_NO_WAIT);
     k_thread_name_set(&bleThread, "nrf54_ble");
     LOG_INF("BLE async start requested");
 }
@@ -228,37 +261,40 @@ void nrf54BluetoothSetEnabled(bool enable)
         return;
     }
 
-    if (!config.bluetooth.enabled) {
-        LOG_WRN("Bluetooth disabled in Meshtastic config; advertising anyway for nRF54 bring-up");
+    if (appReady && !config.bluetooth.enabled) {
+        LOG_WRN("Bluetooth disabled in Meshtastic config; enabling for nRF54 bring-up");
+        config.bluetooth.enabled = true;
     }
 
     if (!btReady) {
-        int err = bt_enable(nullptr);
-        if (err && err != -EALREADY) {
-            LOG_ERR("bt_enable returned err=%d", err);
+        if (enablePending) {
+            LOG_INF("BLE enable already pending");
             return;
         }
-        btReady = true;
-        LOG_INF("Bluetooth initialized");
+
+        enablePending = true;
+        int err = bt_enable(btReadyCallback);
+        if (err && err != -EALREADY) {
+            LOG_ERR("bt_enable returned err=%d", err);
+            enablePending = false;
+            return;
+        }
+        if (err == -EALREADY) {
+            enablePending = false;
+            btReady = true;
+            LOG_INF("Bluetooth already initialized");
+            startAdvertising();
+        } else {
+            LOG_INF("Bluetooth enable requested");
+        }
+        return;
     }
 
     if (appReady && !phoneApi) {
         phoneApi = new ZephyrBluetoothPhoneAPI();
     }
 
-    if (!advertising && !currentConn) {
-        const char *name = appReady ? getDeviceName() : "Meshtastic";
-        struct bt_data sd[] = {
-            BT_DATA(BT_DATA_NAME_COMPLETE, name, static_cast<uint8_t>(strlen(name))),
-        };
-        int err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
-        if (err) {
-            LOG_ERR("BLE advertising start failed err=%d", err);
-            return;
-        }
-        advertising = true;
-        LOG_INF("BLE advertising as %s", name);
-    }
+    startAdvertising();
 }
 
 void nrf54BluetoothMarkAppReady()
