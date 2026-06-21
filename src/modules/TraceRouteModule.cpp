@@ -205,16 +205,14 @@ void TraceRouteModule::alterReceivedProtobuf(meshtastic_MeshPacket &p, meshtasti
                     result += name;
                     if (snr != 0.0f) {
                         result += "(";
-                        result += String(snr, 1);
-                        result += "dB)";
+                        result += vformat("%.1fdB)", (double)snr);
                     }
                 }
                 result += " > ";
                 result += getNodeName(tracingNode);
                 if (r->snr_towards_count > 0 && r->snr_towards[r->snr_towards_count - 1] != INT8_MIN) {
                     result += "(";
-                    result += String((float)r->snr_towards[r->snr_towards_count - 1] / 4.0f, 1);
-                    result += "dB)";
+                    result += vformat("%.1fdB)", (double)((float)r->snr_towards[r->snr_towards_count - 1] / 4.0f));
                 }
                 result += "\n";
             } else {
@@ -224,8 +222,7 @@ void TraceRouteModule::alterReceivedProtobuf(meshtastic_MeshPacket &p, meshtasti
                 result += getNodeName(tracingNode);
                 if (r->snr_towards_count > 0 && r->snr_towards[0] != INT8_MIN) {
                     result += "(";
-                    result += String((float)r->snr_towards[0] / 4.0f, 1);
-                    result += "dB)";
+                    result += vformat("%.1fdB)", (double)((float)r->snr_towards[0] / 4.0f));
                 }
                 result += "\n";
             }
@@ -240,8 +237,7 @@ void TraceRouteModule::alterReceivedProtobuf(meshtastic_MeshPacket &p, meshtasti
                     result += name;
                     if (snr != 0.0f) {
                         result += "(";
-                        result += String(snr, 1);
-                        result += "dB)";
+                        result += vformat("%.1fdB)", (double)snr);
                     }
                 }
                 // add initiator node
@@ -249,8 +245,7 @@ void TraceRouteModule::alterReceivedProtobuf(meshtastic_MeshPacket &p, meshtasti
                 result += getNodeName(nodeDB->getNodeNum());
                 if (r->snr_back_count > 0 && r->snr_back[r->snr_back_count - 1] != INT8_MIN) {
                     result += "(";
-                    result += String((float)r->snr_back[r->snr_back_count - 1] / 4.0f, 1);
-                    result += "dB)";
+                    result += vformat("%.1fdB)", (double)((float)r->snr_back[r->snr_back_count - 1] / 4.0f));
                 }
             } else {
                 // Direct return path (no intermediate hops)
@@ -259,8 +254,7 @@ void TraceRouteModule::alterReceivedProtobuf(meshtastic_MeshPacket &p, meshtasti
                 result += getNodeName(nodeDB->getNodeNum());
                 if (r->snr_back_count > 0 && r->snr_back[0] != INT8_MIN) {
                     result += "(";
-                    result += String((float)r->snr_back[0] / 4.0f, 1);
-                    result += "dB)";
+                    result += vformat("%.1fdB)", (double)((float)r->snr_back[0] / 4.0f));
                 }
             }
 
@@ -557,7 +551,7 @@ bool TraceRouteModule::startTraceRoute(NodeNum node)
     if (initialized && lastTraceRouteTime > 0 && now - lastTraceRouteTime < cooldownMs) {
         // Cooldown
         unsigned long wait = (cooldownMs - (now - lastTraceRouteTime)) / 1000;
-        bannerText = String("Wait for ") + String(wait) + String("s");
+        bannerText = vformat("Wait for %lus", wait);
         runState = TRACEROUTE_STATE_COOLDOWN;
         resultText = "";
         clearResultLines();
@@ -682,7 +676,7 @@ void TraceRouteModule::launch(NodeNum node)
     unsigned long now = millis();
     if (initialized && lastTraceRouteTime > 0 && now - lastTraceRouteTime < cooldownMs) {
         unsigned long wait = (cooldownMs - (now - lastTraceRouteTime)) / 1000;
-        bannerText = String("Wait for ") + String(wait) + String("s");
+        bannerText = vformat("Wait for %lus", wait);
         runState = TRACEROUTE_STATE_COOLDOWN;
         resultText = "";
         clearResultLines();
@@ -848,7 +842,7 @@ int32_t TraceRouteModule::runOnce()
     if (runState == TRACEROUTE_STATE_COOLDOWN) {
         unsigned long wait = (cooldownMs - (now - lastTraceRouteTime)) / 1000;
         if (wait > 0) {
-            String newBannerText = String("Wait for ") + String(wait) + String("s");
+            String newBannerText = vformat("Wait for %lus", wait);
             bannerText = newBannerText;
             LOG_INFO("TraceRoute cooldown: updating banner to %s", bannerText.c_str());
 
