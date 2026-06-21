@@ -15,6 +15,12 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#ifdef ARCH_NRF54
+#include <zephyr/sys/printk.h>
+#define HALOW_TRACE(...) printk(__VA_ARGS__)
+#else
+#define HALOW_TRACE(...) printf(__VA_ARGS__)
+#endif
 
 #if defined(USE_MM_IOT_ESP32) || defined(USE_MM_IOT_ZEPHYR)
 extern "C" {
@@ -240,7 +246,7 @@ HaLowInterface::~HaLowInterface() = default;
 
 bool HaLowInterface::init()
 {
-    printf("HaLow: init entry\n");
+    HALOW_TRACE("HaLow: init entry\n");
     RadioInterface::init();
 
 #ifdef MESHTASTIC_USE_MM_IOT_HALOW
@@ -265,23 +271,23 @@ bool HaLowInterface::init()
 
     LOG_INFO("HaLow: mmhal init");
 #ifdef USE_MM_IOT_ZEPHYR
-    printf("HaLow: calling mmhal_wlan_init\n");
+    HALOW_TRACE("HaLow: calling mmhal_wlan_init\n");
     fflush(stdout);
     mmhal_wlan_init();
-    printf("HaLow: mmhal_wlan_init complete\n");
+    HALOW_TRACE("HaLow: mmhal_wlan_init complete\n");
 #else
-    printf("HaLow: calling mmhal_init\n");
+    HALOW_TRACE("HaLow: calling mmhal_init\n");
     fflush(stdout);
     mmhal_init();
-    printf("HaLow: mmhal_init complete\n");
+    HALOW_TRACE("HaLow: mmhal_init complete\n");
 #endif
     fflush(stdout);
 
     LOG_INFO("HaLow: mmwlan_init()");
-    printf("HaLow: calling mmwlan_init\n");
+    HALOW_TRACE("HaLow: calling mmwlan_init\n");
     fflush(stdout);
     mmwlan_init();
-    printf("HaLow: mmwlan_init complete\n");
+    HALOW_TRACE("HaLow: mmwlan_init complete\n");
     fflush(stdout);
 
     if (!applyChannelList()) {
@@ -289,15 +295,15 @@ bool HaLowInterface::init()
     }
 
     struct mmwlan_boot_args boot_args = MMWLAN_BOOT_ARGS_INIT;
-    printf("HaLow: calling mmwlan_boot\n");
+    HALOW_TRACE("HaLow: calling mmwlan_boot\n");
     fflush(stdout);
     enum mmwlan_status st = mmwlan_boot(&boot_args);
     if (st != MMWLAN_SUCCESS) {
         LOG_ERROR("HaLow: mmwlan_boot failed (%d) — firmware load or SPI wiring", (int)st);
-        printf("HaLow: mmwlan_boot failed (%d)\n", (int)st);
+        HALOW_TRACE("HaLow: mmwlan_boot failed (%d)\n", (int)st);
         return false;
     }
-    printf("HaLow: mmwlan_boot complete\n");
+    HALOW_TRACE("HaLow: mmwlan_boot complete\n");
     wlanReady = true;
 
     struct mmwlan_version version;

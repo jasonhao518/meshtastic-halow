@@ -46,7 +46,11 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
 LOG_MODULE_REGISTER(nrf54_setup_trace, LOG_LEVEL_INF);
-#define NRF54_SETUP_LOG(...) LOG_INF(__VA_ARGS__)
+#define NRF54_SETUP_LOG(...)                                                                                                      \
+    do {                                                                                                                          \
+        printk(__VA_ARGS__);                                                                                                      \
+        printk("\n");                                                                                                             \
+    } while (0)
 #define NRF54_SETUP_PRINTK(...) printk(__VA_ARGS__)
 #else
 #define NRF54_SETUP_LOG(...)
@@ -318,7 +322,7 @@ void waitUntilPowerLevelSafe()
 void printInfo()
 {
 #ifdef ARCH_NRF54
-    LOG_INF("S:B:%d,%s,%s,%s", HW_VENDOR, optstr(APP_VERSION), optstr(APP_ENV), optstr(APP_REPO));
+    NRF54_SETUP_PRINTK("S:B:%d,%s,%s,%s\n", HW_VENDOR, optstr(APP_VERSION), optstr(APP_ENV), optstr(APP_REPO));
 #else
     LOG_INFO("S:B:%d,%s,%s,%s", HW_VENDOR, optstr(APP_VERSION), optstr(APP_ENV), optstr(APP_REPO));
 #endif
@@ -327,6 +331,8 @@ void printInfo()
 void setup()
 {
     NRF54_SETUP_LOG("setup: begin");
+    std::unique_ptr<RadioInterface> rIf = nullptr;
+    bool radioInterfaceAdded = false;
 
     // initialize power HAL layer as early as possible
     powerHAL_init();
@@ -489,7 +495,7 @@ void setup()
     NRF54_SETUP_LOG("setup: OSThread setup done");
 
     fsInit();
-    NRF54_SETUP_LOG("setup: fsInit done");
+    NRF54_SETUP_PRINTK("S0\n");
 
 #if !MESHTASTIC_EXCLUDE_I2C
 #if defined(I2C_SDA1) && defined(ARCH_RP2040)
@@ -544,14 +550,20 @@ void setup()
 
     // Currently only the tbeam has a PMU
     // PMU initialization needs to be placed before i2c scanning
+#ifdef ARCH_NRF54
+    NRF54_SETUP_PRINTK("S1\n");
+#else
     power = new Power();
     power->setStatusHandler(powerStatus);
     powerStatus->observe(&power->newStatus);
+    NRF54_SETUP_LOG("setup: power setup begin");
     power->setup(); // Must be after status handler is installed, so that handler gets notified of the initial configuration
     NRF54_SETUP_LOG("setup: power setup done");
     NRF54_SETUP_PRINTK("NRF54 setup: after power setup\n");
+#endif
 
 #if !MESHTASTIC_EXCLUDE_I2C
+    NRF54_SETUP_PRINTK("NRF54 setup: I2C scan begin\n");
     // We need to scan here to decide if we have a screen for nodeDB.init() and because power has been applied to
     // accessories
     auto i2cScanner = std::unique_ptr<ScanI2CTwoWire>(new ScanI2CTwoWire());
@@ -575,6 +587,7 @@ void setup()
 #endif
 
     auto i2cCount = i2cScanner->countDevices();
+    NRF54_SETUP_PRINTK("NRF54 setup: I2C scan count=%u\n", i2cCount);
     if (i2cCount == 0) {
         LOG_INFO("No I2C devices found");
     } else {
@@ -710,8 +723,7 @@ void setup()
     scannerToSensorsMap(i2cScanner, ScanI2C::DeviceType::ICM20948, meshtastic_TelemetrySensorType_ICM20948);
     scannerToSensorsMap(i2cScanner, ScanI2C::DeviceType::MAX30102, meshtastic_TelemetrySensorType_MAX30102);
 #else
-    NRF54_SETUP_LOG("setup: I2C scan skipped");
-    NRF54_SETUP_PRINTK("NRF54 setup: I2C scan skipped\n");
+    NRF54_SETUP_PRINTK("S2\n");
 #endif
 
 #ifdef HAS_SDCARD
@@ -719,12 +731,9 @@ void setup()
 #endif
 
     // Hello
-    NRF54_SETUP_LOG("setup: printInfo begin");
-    NRF54_SETUP_PRINTK("NRF54 setup: printInfo begin\n");
+    NRF54_SETUP_PRINTK("S3\n");
     printInfo();
-    NRF54_SETUP_LOG("setup: printInfo done");
-    NRF54_SETUP_PRINTK("NRF54 setup: printInfo done\n");
-#ifdef BUILD_EPOCH
+#if defined(BUILD_EPOCH) && !defined(ARCH_NRF54)
     LOG_INFO("Build timestamp: %ld", BUILD_EPOCH);
 #endif
 
@@ -742,15 +751,18 @@ void setup()
 
     // We do this as early as possible because this loads preferences from flash
     // but we need to do this after main cpu init (esp32setup), because we need the random seed set
-    NRF54_SETUP_LOG("setup: NodeDB create begin");
-    NRF54_SETUP_PRINTK("NRF54 setup: NodeDB create begin\n");
+    NRF54_SETUP_PRINTK("N0\n");
     nodeDB = new NodeDB;
-    NRF54_SETUP_LOG("setup: NodeDB created");
-    NRF54_SETUP_PRINTK("NRF54 setup: NodeDB created\n");
+    NRF54_SETUP_PRINTK("N1\n");
 
     // Initialize transmit history to persist broadcast throttle timers across reboots
+    NRF54_SETUP_PRINTK("T0\n");
     TransmitHistory::getInstance()->loadFromDisk();
+#ifdef ARCH_NRF54
+    NRF54_SETUP_PRINTK("T1\n");
+#else
     NRF54_SETUP_LOG("setup: transmit history loaded");
+#endif
 #if HAS_TFT
     if (config.display.displaymode == meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
         tftSetup();
@@ -758,7 +770,11 @@ void setup()
 #endif
 
     router = new ReliableRouter();
+#ifdef ARCH_NRF54
+    NRF54_SETUP_PRINTK("R0\n");
+#else
     NRF54_SETUP_LOG("setup: router created");
+#endif
 
     // only play start melody when role is not tracker or sensor
     if (config.power.is_power_saving == true &&
@@ -949,6 +965,11 @@ void setup()
     NRF54_SETUP_LOG("setup: MeshService created");
     service->init();
     NRF54_SETUP_LOG("setup: MeshService init done");
+#if defined(ARCH_NRF54) && defined(USE_HALOW_RADIO)
+    NRF54_SETUP_PRINTK("NRF54 setup: calling initLoRa after MeshService init\n");
+    rIf = initLoRa();
+    NRF54_SETUP_PRINTK("NRF54 setup: HaLow init after MeshService done rIf=%p\n", rIf.get());
+#endif
 
     // Set osk_found for trackball/encoder devices BEFORE setupModules so CannedMessageModule can detect it
 #if defined(HAS_TRACKBALL) || (defined(INPUTDRIVER_ENCODER_TYPE) && INPUTDRIVER_ENCODER_TYPE == 2)
@@ -960,13 +981,17 @@ void setup()
     // Now that the mesh service is created, create any modules
     setupModules();
     NRF54_SETUP_LOG("setup: modules setup done");
+    NRF54_SETUP_PRINTK("NRF54 setup: modules setup done\n");
 #ifdef ARCH_NRF54
     PowerFSM_setup();
     NRF54_SETUP_LOG("setup: PowerFSM setup done before BLE API ready");
+    NRF54_SETUP_PRINTK("NRF54 setup: PowerFSM setup done before BLE API ready\n");
     powerFSMthread = new PowerFSMThread();
     NRF54_SETUP_LOG("setup: PowerFSM thread created before BLE API ready");
+    NRF54_SETUP_PRINTK("NRF54 setup: PowerFSM thread created before BLE API ready\n");
     nrf54BluetoothMarkAppReady();
     NRF54_SETUP_LOG("setup: BLE Meshtastic API ready");
+    NRF54_SETUP_PRINTK("NRF54 setup: BLE Meshtastic API ready\n");
 #endif
 
 #if !MESHTASTIC_EXCLUDE_I2C
@@ -1022,9 +1047,13 @@ void setup()
 #endif
 #endif
 
-    NRF54_SETUP_LOG("setup: initLoRa begin");
-    auto rIf = initLoRa();
-    NRF54_SETUP_LOG("setup: initLoRa done rIf=%p", rIf.get());
+    if (!rIf) {
+        NRF54_SETUP_LOG("setup: initLoRa begin");
+        rIf = initLoRa();
+        NRF54_SETUP_LOG("setup: initLoRa done rIf=%p", rIf.get());
+    } else {
+        NRF54_SETUP_LOG("setup: initLoRa skipped, interface already initialized");
+    }
 
     lateInitVariant(); // Do board specific init (see extra_variants/README.md for documentation)
     NRF54_SETUP_LOG("setup: lateInitVariant done");
@@ -1071,7 +1100,9 @@ void setup()
     // Start airtime logger thread.
     airTime = new AirTime();
 
-    if (!rIf)
+    if (radioInterfaceAdded) {
+        NRF54_SETUP_LOG("setup: radio interface already added");
+    } else if (!rIf)
         RECORD_CRITICALERROR(meshtastic_CriticalErrorCode_NO_RADIO);
     else {
         // Log bit rate to debug output
@@ -1080,6 +1111,7 @@ void setup()
                                                        1000);
 
         router->addInterface(std::move(rIf));
+        radioInterfaceAdded = true;
     }
 
     // This must be _after_ service.init because we need our preferences loaded from flash to have proper timeout values
@@ -1199,7 +1231,9 @@ void loop()
 #ifdef ARCH_NRF52
     nrf52Loop();
 #endif
+#ifndef ARCH_NRF54
     power->powerCommandsCheck();
+#endif
 
 #if !MESHTASTIC_EXCLUDE_LORA
     if (RadioLibInterface::instance != nullptr) {

@@ -28,7 +28,14 @@
 #include <assert.h>
 #include <pb_decode.h>
 #include <pb_encode.h>
+#include <stdio.h>
 #include <string.h>
+#ifdef ARCH_NRF54
+#include <zephyr/sys/printk.h>
+#define RADIO_TRACE(...) printk(__VA_ARGS__)
+#else
+#define RADIO_TRACE(...) printf(__VA_ARGS__)
+#endif
 
 #ifdef ARCH_PORTDUINO
 #include "platform/portduino/PortduinoGlue.h"
@@ -264,6 +271,7 @@ extern SPIClass SPI1;
 
 std::unique_ptr<RadioInterface> initLoRa()
 {
+    RADIO_TRACE("L0\n");
     std::unique_ptr<RadioInterface> rIf = nullptr;
 
 #if !MESHTASTIC_EXCLUDE_LORA
@@ -536,20 +544,26 @@ std::unique_ptr<RadioInterface> initLoRa()
 #endif
 
 #ifdef USE_HALOW_RADIO
+    RADIO_TRACE("L1\n");
     // HaLow is a RadioInterface implementation for variants where the RF
     // module is MM6108 instead of a Semtech LoRa chipset.
     if (!rIf) {
+        RADIO_TRACE("L2\n");
         auto halowIf = std::unique_ptr<HaLowInterface>(new HaLowInterface());
+        RADIO_TRACE("L3\n");
         if (!halowIf->init()) {
             LOG_WARN("HaLow radio init failed");
+            RADIO_TRACE("L4 fail\n");
         } else {
             LOG_INFO("HaLow radio init success");
+            RADIO_TRACE("L4 ok\n");
             rIf = std::move(halowIf);
             radioType = HALOW_RADIO;
         }
     }
 #endif
 
+    RADIO_TRACE("L5\n");
     return rIf;
 }
 
