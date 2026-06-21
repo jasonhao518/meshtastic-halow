@@ -16,19 +16,22 @@
 #include <stdint.h>
 #include <string.h>
 
-#ifdef USE_MM_IOT_ESP32
+#if defined(USE_MM_IOT_ESP32) || defined(USE_MM_IOT_ZEPHYR)
 extern "C" {
 #include "mmpkt.h"
 #include "mmhal.h"
 #include "mmregdb.h"
 #include "mmwlan.h"
 }
+#endif
+
+#ifdef USE_MM_IOT_ESP32
 #include "driver/gpio.h"
 #include "soc/gpio_reg.h"
+#endif
 
 #ifndef HALOW_MESH_SCAN_DWELL_MS
 #define HALOW_MESH_SCAN_DWELL_MS 120
-#endif
 #endif
 
 static const char *regionToHaLowCountryCode(meshtastic_Config_LoRaConfig_RegionCode region)
