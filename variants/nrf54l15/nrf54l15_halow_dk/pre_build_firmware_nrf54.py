@@ -6,6 +6,7 @@ Import("env")
 
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 PROJECT_DIR = Path(env.subst("$PROJECT_DIR")).resolve()
@@ -98,3 +99,25 @@ env["ENV"]["MORSE_SM_USE_APP_BINARIES"] = "1"
 os.environ["MORSE_SM_USE_APP_BINARIES"] = "1"
 
 print(f"Using Morse Zephyr module: {mm_root}")
+
+
+def ensure_zephyr_final_linker_script(target, source, env):
+    linker = BUILD_DIR / "zephyr" / "linker.cmd"
+    if linker.exists():
+        return
+
+    build_ninja = BUILD_DIR / "build.ninja"
+    lines = build_ninja.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("build zephyr/linker.cmd "):
+            for command_line in lines[index + 1 :]:
+                if command_line.startswith("  COMMAND = "):
+                    subprocess.run(command_line.removeprefix("  COMMAND = "), shell=True, check=True)
+                    return
+            break
+
+    raise RuntimeError(f"Could not find linker.cmd generation command in {build_ninja}")
+
+
+for suffix in ("", ".elf"):
+    env.AddPreAction(str(BUILD_DIR / f"{env.subst('$PROGNAME')}{suffix}"), ensure_zephyr_final_linker_script)

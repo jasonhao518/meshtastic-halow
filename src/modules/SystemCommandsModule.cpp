@@ -10,7 +10,6 @@
 
 #include "GPS.h"
 #include "MeshService.h"
-#include "Module.h"
 #include "NodeDB.h"
 #include "main.h"
 #include "modules/AdminModule.h"
