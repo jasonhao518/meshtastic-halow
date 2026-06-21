@@ -141,6 +141,17 @@ static inline char *stpcpy(char *dest, const char *src)
     return dest;
 }
 
+static inline size_t strlcpy(char *dest, const char *src, size_t size)
+{
+    size_t srcLen = strlen(src);
+    if (size > 0) {
+        size_t copyLen = min(srcLen, size - 1);
+        memcpy(dest, src, copyLen);
+        dest[copyLen] = '\0';
+    }
+    return srcLen;
+}
+
 static inline double radians(double deg)
 {
     return deg * (PI / 180.0);

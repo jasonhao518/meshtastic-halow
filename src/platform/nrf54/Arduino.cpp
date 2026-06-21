@@ -1,4 +1,5 @@
 #include "Arduino.h"
+#include "ZephyrBluetooth.h"
 
 #include <stdarg.h>
 #include <string.h>
@@ -129,12 +130,12 @@ void tzset() {}
 
 void setBluetoothEnable(bool enable)
 {
-    (void)enable;
+    nrf54BluetoothSetEnabled(enable);
 }
 
 void updateBatteryLevel(uint8_t level)
 {
-    (void)level;
+    nrf54BluetoothUpdateBatteryLevel(level);
 }
 
 void getMacAddr(uint8_t *dmac)

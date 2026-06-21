@@ -1,6 +1,8 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
+#include "ZephyrBluetooth.h"
+
 LOG_MODULE_REGISTER(nrf54_meshtastic, LOG_LEVEL_DBG);
 
 extern void setup();
@@ -13,6 +15,7 @@ extern "C" int main(void)
 {
     LOG_INF("Meshtastic nRF54L15 full app starting");
     setup();
+    nrf54BluetoothSetEnabled(true);
 
     while (true) {
         loop();
