@@ -13,9 +13,24 @@ uint32_t millis()
     return (uint32_t)k_uptime_get_32();
 }
 
+uint32_t micros()
+{
+    return (uint32_t)k_cyc_to_us_floor64(k_cycle_get_64());
+}
+
 void delay(uint32_t ms)
 {
     k_sleep(K_MSEC(ms));
+}
+
+void delayMicroseconds(uint32_t us)
+{
+    k_busy_wait(us);
+}
+
+void yield()
+{
+    k_yield();
 }
 
 void pinMode(uint32_t pin, uint32_t mode)
@@ -36,6 +51,43 @@ int digitalRead(uint32_t pin)
     return LOW;
 }
 
+long pulseIn(uint32_t pin, uint32_t state, uint32_t timeout)
+{
+    (void)pin;
+    (void)state;
+    (void)timeout;
+    return 0;
+}
+
+void tone(uint32_t pin, unsigned int frequency, uint32_t duration)
+{
+    (void)pin;
+    (void)frequency;
+    (void)duration;
+}
+
+void noTone(uint32_t pin)
+{
+    (void)pin;
+}
+
+void attachInterrupt(uint32_t pin, void (*callback)(void), uint32_t mode)
+{
+    (void)pin;
+    (void)callback;
+    (void)mode;
+}
+
+void detachInterrupt(uint32_t pin)
+{
+    (void)pin;
+}
+
+uint32_t digitalPinToInterrupt(uint32_t pin)
+{
+    return pin;
+}
+
 long random(long max)
 {
     if (max <= 0) {
@@ -51,6 +103,16 @@ long random(long min, long max)
     }
     return min + random(max - min);
 }
+
+int setenv(const char *name, const char *value, int overwrite)
+{
+    (void)name;
+    (void)value;
+    (void)overwrite;
+    return 0;
+}
+
+void tzset() {}
 
 size_t Print::write(uint8_t c)
 {

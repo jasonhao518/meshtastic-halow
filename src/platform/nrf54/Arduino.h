@@ -3,24 +3,61 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <algorithm>
 #include <string>
 #include <zephyr/kernel.h>
 
 using String = std::string;
+using std::max;
+using std::min;
+using byte = uint8_t;
+
+class __FlashStringHelper;
 
 #define HIGH 1
 #define LOW 0
 #define INPUT 0
 #define OUTPUT 1
 #define INPUT_PULLUP 2
+#define RISING 1
+#define FALLING 2
+#define DEC 10
+#define HEX 16
+#define OCT 8
+#define BIN 2
+#define PROGMEM
+#define F(str) (reinterpret_cast<const __FlashStringHelper *>(str))
+
+using PGM_P = const char *;
+
+static inline uint8_t pgm_read_byte(const void *addr)
+{
+    return *reinterpret_cast<const uint8_t *>(addr);
+}
+
+static inline uint32_t pgm_read_dword(const void *addr)
+{
+    return *reinterpret_cast<const uint32_t *>(addr);
+}
 
 uint32_t millis();
+uint32_t micros();
 void delay(uint32_t ms);
+void delayMicroseconds(uint32_t us);
+void yield();
 void pinMode(uint32_t pin, uint32_t mode);
 void digitalWrite(uint32_t pin, uint32_t value);
 int digitalRead(uint32_t pin);
+long pulseIn(uint32_t pin, uint32_t state, uint32_t timeout = 1000000);
+void tone(uint32_t pin, unsigned int frequency, uint32_t duration = 0);
+void noTone(uint32_t pin);
+void attachInterrupt(uint32_t pin, void (*callback)(void), uint32_t mode);
+void detachInterrupt(uint32_t pin);
+uint32_t digitalPinToInterrupt(uint32_t pin);
 long random(long max);
 long random(long min, long max);
+int setenv(const char *name, const char *value, int overwrite);
+void tzset();
 
 class Print {
   public:
