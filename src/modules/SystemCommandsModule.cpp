@@ -14,7 +14,9 @@
 #include "NodeDB.h"
 #include "main.h"
 #include "modules/AdminModule.h"
+#if !MESHTASTIC_EXCLUDE_EXTERNALNOTIFICATION
 #include "modules/ExternalNotificationModule.h"
+#endif
 
 SystemCommandsModule *systemCommandsModule;
 
@@ -44,11 +46,13 @@ int SystemCommandsModule::handleInputEvent(const InputEvent *event)
         return 0;
     // Mute
     case INPUT_BROKER_MSG_MUTE_TOGGLE:
+#if !MESHTASTIC_EXCLUDE_EXTERNALNOTIFICATION
         if (moduleConfig.external_notification.enabled && externalNotificationModule) {
             externalNotificationModule->setMute(!externalNotificationModule->getMute());
             IF_SCREEN(if (!externalNotificationModule->getMute()) externalNotificationModule->stopNow(); screen->showSimpleBanner(
                 externalNotificationModule->getMute() ? "Notifications\nDisabled" : "Notifications\nEnabled", 3000);)
         }
+#endif
         return 0;
     // Bluetooth
     case INPUT_BROKER_MSG_BLUETOOTH_TOGGLE:

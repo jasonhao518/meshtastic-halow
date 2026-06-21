@@ -104,6 +104,11 @@ long random(long min, long max)
     return min + random(max - min);
 }
 
+long random()
+{
+    return (long)sys_rand32_get();
+}
+
 long map(long value, long fromLow, long fromHigh, long toLow, long toHigh)
 {
     if (fromHigh == fromLow) {

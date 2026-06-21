@@ -6,9 +6,11 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <strings.h>
 #include <zephyr/kernel.h>
 
 using String = std::string;
+using uint = unsigned int;
 using std::max;
 using std::min;
 using std::lround;
@@ -59,6 +61,7 @@ void detachInterrupt(uint32_t pin);
 uint32_t digitalPinToInterrupt(uint32_t pin);
 long random(long max);
 long random(long min, long max);
+long random();
 long map(long value, long fromLow, long fromHigh, long toLow, long toHigh);
 int setenv(const char *name, const char *value, int overwrite);
 void tzset();

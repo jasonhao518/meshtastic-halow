@@ -11,7 +11,7 @@
 #include <unordered_map>
 #endif
 
-#if !defined(ARCH_PORTDUINO)
+#if !defined(ARCH_PORTDUINO) && !defined(ARCH_NRF54)
 extern "C" void delay(uint32_t dwMs);
 #endif
 
