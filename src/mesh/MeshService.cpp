@@ -229,6 +229,10 @@ ErrorCode MeshService::sendQueueStatusToPhone(const meshtastic_QueueStatus &qs, 
 
     copied->res = res;
     copied->mesh_packet_id = mesh_packet_id;
+    if (res == ERRNO_OK && copied->maxlen == 0) {
+        copied->free = 1;
+        copied->maxlen = 1;
+    }
 
     if (toPhoneQueueStatusQueue.numFree() == 0) {
         LOG_INFO("tophone queue status queue is full, discard oldest");
