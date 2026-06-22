@@ -34,9 +34,12 @@
 #include <vector>
 
 #ifdef ARCH_NRF54
-#include <zephyr/logging/log.h>
-LOG_MODULE_DECLARE(nrf54_setup_trace);
-#define NRF54_NODEDB_LOG(...) LOG_INF(__VA_ARGS__)
+#include <zephyr/sys/printk.h>
+#define NRF54_NODEDB_LOG(...)                                                                                                     \
+    do {                                                                                                                          \
+        printk(__VA_ARGS__);                                                                                                      \
+        printk("\n");                                                                                                             \
+    } while (0)
 #else
 #define NRF54_NODEDB_LOG(...) LOG_INFO(__VA_ARGS__)
 #endif
@@ -380,9 +383,23 @@ static uint8_t ourMacAddr[6];
 NodeDB::NodeDB()
 {
     NRF54_NODEDB_LOG("Init NodeDB");
+#ifdef ARCH_NRF54
+    NRF54_NODEDB_LOG("D0");
+    installDefaultNodeDatabase();
+    NRF54_NODEDB_LOG("D1");
+    installDefaultDeviceState();
+    NRF54_NODEDB_LOG("D2");
+    installDefaultConfig(false);
+    NRF54_NODEDB_LOG("D3");
+    installDefaultModuleConfig();
+    NRF54_NODEDB_LOG("D4");
+    installDefaultChannels();
+    NRF54_NODEDB_LOG("D5");
+#else
     NRF54_NODEDB_LOG("NodeDB: loadFromDisk begin");
     loadFromDisk();
     NRF54_NODEDB_LOG("NodeDB: loadFromDisk done");
+#endif
     NRF54_NODEDB_LOG("NodeDB: cleanupMeshDB begin");
     cleanupMeshDB();
     NRF54_NODEDB_LOG("NodeDB: cleanupMeshDB done");
@@ -760,24 +777,37 @@ bool NodeDB::factoryReset(bool eraseBleBonds)
 
 void NodeDB::installDefaultNodeDatabase()
 {
+    NRF54_NODEDB_LOG("D0a");
     LOG_DEBUG("Install default NodeDatabase");
+    NRF54_NODEDB_LOG("D0b");
     nodeDatabase.version = DEVICESTATE_CUR_VER;
+    NRF54_NODEDB_LOG("D0c");
     nodeDatabase.nodes = std::vector<meshtastic_NodeInfoLite>(MAX_NUM_NODES);
+    NRF54_NODEDB_LOG("D0d");
     numMeshNodes = 0;
     meshNodes = &nodeDatabase.nodes;
+    NRF54_NODEDB_LOG("D0e");
+#ifndef ARCH_NRF54
     concurrency::LockGuard satelliteGuard(&satelliteMutex);
+#endif
+    NRF54_NODEDB_LOG("D0f");
 #if !MESHTASTIC_EXCLUDE_POSITIONDB
+    NRF54_NODEDB_LOG("D0g");
     nodePositions.clear();
 #endif
 #if !MESHTASTIC_EXCLUDE_TELEMETRYDB
+    NRF54_NODEDB_LOG("D0h");
     nodeTelemetry.clear();
 #endif
 #if !MESHTASTIC_EXCLUDE_ENVIRONMENTDB
+    NRF54_NODEDB_LOG("D0i");
     nodeEnvironment.clear();
 #endif
 #if !MESHTASTIC_EXCLUDE_STATUSDB
+    NRF54_NODEDB_LOG("D0j");
     nodeStatus.clear();
 #endif
+    NRF54_NODEDB_LOG("D0k");
 }
 
 void NodeDB::installDefaultConfig(bool preserveKey = false)
@@ -1471,6 +1501,7 @@ void NodeDB::cleanupMeshDB()
 
 void NodeDB::installDefaultDeviceState()
 {
+    NRF54_NODEDB_LOG("D1a");
     LOG_INFO("Install default DeviceState");
     // memset(&devicestate, 0, sizeof(meshtastic_DeviceState));
 
@@ -1481,10 +1512,13 @@ void NodeDB::installDefaultDeviceState()
     devicestate.receive_queue_count = 0; // Not yet implemented FIXME
     devicestate.has_rx_waypoint = false;
 
+    NRF54_NODEDB_LOG("D1b");
     generatePacketId(); // FIXME - ugly way to init current_packet_id;
 
     // Set default owner name
+    NRF54_NODEDB_LOG("D1c");
     pickNewNodeNum(); // based on macaddr now
+    NRF54_NODEDB_LOG("D1d");
 #ifdef USERPREFS_CONFIG_OWNER_LONG_NAME
     snprintf(owner.long_name, sizeof(owner.long_name), (const char *)USERPREFS_CONFIG_OWNER_LONG_NAME);
 #else
@@ -1545,9 +1579,12 @@ LoadFileResult NodeDB::loadProto(const char *filename, size_t protoSize, size_t 
 {
     LoadFileResult state = LoadFileResult::OTHER_FAILURE;
 #ifdef FSCom
+    NRF54_NODEDB_LOG("NodeDB: loadProto lock %s", filename);
     concurrency::LockGuard g(spiLock);
+    NRF54_NODEDB_LOG("NodeDB: loadProto open %s", filename);
 
     auto f = FSCom.open(filename, FILE_O_READ);
+    NRF54_NODEDB_LOG("NodeDB: loadProto opened %s ok=%d", filename, f ? 1 : 0);
 
     if (f) {
         LOG_INFO("Load %s", filename);
@@ -1563,6 +1600,7 @@ LoadFileResult NodeDB::loadProto(const char *filename, size_t protoSize, size_t 
             state = LoadFileResult::LOAD_SUCCESS;
         }
         f.close();
+        NRF54_NODEDB_LOG("NodeDB: loadProto close %s state=%d", filename, (int)state);
     } else {
         LOG_ERROR("Could not open / read %s", filename);
     }
@@ -1575,6 +1613,7 @@ LoadFileResult NodeDB::loadProto(const char *filename, size_t protoSize, size_t 
 
 void NodeDB::loadFromDisk()
 {
+    NRF54_NODEDB_LOG("NodeDB: loadFromDisk entry");
     // Mark the current device state as completely unusable, so that if we fail reading the entire file from
     // disk we will still factoryReset to restore things.
     devicestate.version = 0;
@@ -1590,7 +1629,9 @@ void NodeDB::loadFromDisk()
 #endif
 #ifdef FSCom
 #if defined(FACTORY_INSTALL) && !defined(ARCH_PORTDUINO)
+    NRF54_NODEDB_LOG("NodeDB: factory install check lock");
     spiLock->lock();
+    NRF54_NODEDB_LOG("NodeDB: factory exists begin");
     if (!FSCom.exists("/prefs/" xstr(BUILD_EPOCH))) {
         LOG_WARN("Factory Install Reset!");
         rmDir("/prefs");
@@ -1602,8 +1643,11 @@ void NodeDB::loadFromDisk()
         }
     }
     spiLock->unlock();
+    NRF54_NODEDB_LOG("NodeDB: factory install check done");
 #endif
+    NRF54_NODEDB_LOG("NodeDB: legacy check lock");
     spiLock->lock();
+    NRF54_NODEDB_LOG("NodeDB: legacy exists begin");
     if (FSCom.exists(legacyPrefFileName)) {
         spiLock->unlock();
         LOG_WARN("Legacy prefs version found, factory resetting");
@@ -1619,6 +1663,7 @@ void NodeDB::loadFromDisk()
     } else {
         spiLock->unlock();
     }
+    NRF54_NODEDB_LOG("NodeDB: legacy check done");
 
 #endif
     // Arm the direct-into-map decode so satellite entries skip the temp vectors.
@@ -1633,9 +1678,11 @@ void NodeDB::loadFromDisk()
 
     // Avoid push_back's power-of-2 capacity growth wasting RAM at small N.
     nodeDatabase.nodes.reserve(MAX_NUM_NODES);
+    NRF54_NODEDB_LOG("NodeDB: nodeDatabase load begin");
 
     auto state = loadProto(nodeDatabaseFileName, getMaxNodesAllocatedSize(), sizeof(meshtastic_NodeDatabase),
                            &meshtastic_NodeDatabase_msg, &nodeDatabase);
+    NRF54_NODEDB_LOG("NodeDB: nodeDatabase load state=%d version=%d", (int)state, nodeDatabase.version);
     if (nodeDatabase.version < DEVICESTATE_MIN_VER) {
         LOG_WARN("NodeDatabase %d is old, discard", nodeDatabase.version);
         installDefaultNodeDatabase();
@@ -1683,8 +1730,10 @@ void NodeDB::loadFromDisk()
     meshNodes->resize(MAX_NUM_NODES);
 
     // static DeviceState scratch; We no longer read into a tempbuf because this structure is 15KB of valuable RAM
+    NRF54_NODEDB_LOG("NodeDB: deviceState load begin");
     state = loadProto(deviceStateFileName, meshtastic_DeviceState_size, sizeof(meshtastic_DeviceState),
                       &meshtastic_DeviceState_msg, &devicestate);
+    NRF54_NODEDB_LOG("NodeDB: deviceState load state=%d version=%d", (int)state, devicestate.version);
 
     // See https://github.com/meshtastic/firmware/issues/4184#issuecomment-2269390786
     // It is very important to try and use the saved prefs even if we fail to read meshtastic_DeviceState.  Because most of our
@@ -1718,8 +1767,10 @@ void NodeDB::loadFromDisk()
         LOG_INFO("Loaded saved devicestate version %d", devicestate.version);
     }
 
+    NRF54_NODEDB_LOG("NodeDB: config load begin");
     state = loadProto(configFileName, meshtastic_LocalConfig_size, sizeof(meshtastic_LocalConfig), &meshtastic_LocalConfig_msg,
                       &config);
+    NRF54_NODEDB_LOG("NodeDB: config load state=%d version=%d", (int)state, config.version);
     if (state != LoadFileResult::LOAD_SUCCESS) {
         installDefaultConfig(); // Our in RAM copy might now be corrupt
     } else {
@@ -1798,8 +1849,10 @@ void NodeDB::loadFromDisk()
         saveToDisk(SEGMENT_CONFIG);
     }
 
+    NRF54_NODEDB_LOG("NodeDB: moduleConfig load begin");
     state = loadProto(moduleConfigFileName, meshtastic_LocalModuleConfig_size, sizeof(meshtastic_LocalModuleConfig),
                       &meshtastic_LocalModuleConfig_msg, &moduleConfig);
+    NRF54_NODEDB_LOG("NodeDB: moduleConfig load state=%d version=%d", (int)state, moduleConfig.version);
     if (state != LoadFileResult::LOAD_SUCCESS) {
         installDefaultModuleConfig(); // Our in RAM copy might now be corrupt
     } else {
@@ -1811,8 +1864,10 @@ void NodeDB::loadFromDisk()
         }
     }
 
+    NRF54_NODEDB_LOG("NodeDB: channelFile load begin");
     state = loadProto(channelFileName, meshtastic_ChannelFile_size, sizeof(meshtastic_ChannelFile), &meshtastic_ChannelFile_msg,
                       &channelFile);
+    NRF54_NODEDB_LOG("NodeDB: channelFile load state=%d version=%d", (int)state, channelFile.version);
     if (state != LoadFileResult::LOAD_SUCCESS) {
         installDefaultChannels(); // Our in RAM copy might now be corrupt
     } else {
@@ -1824,8 +1879,10 @@ void NodeDB::loadFromDisk()
         }
     }
 
+    NRF54_NODEDB_LOG("NodeDB: uiconfig load begin");
     state = loadProto(uiconfigFileName, meshtastic_DeviceUIConfig_size, sizeof(meshtastic_DeviceUIConfig),
                       &meshtastic_DeviceUIConfig_msg, &uiconfig);
+    NRF54_NODEDB_LOG("NodeDB: uiconfig load state=%d", (int)state);
     if (state == LoadFileResult::LOAD_SUCCESS) {
         LOG_INFO("Loaded UIConfig");
     }
