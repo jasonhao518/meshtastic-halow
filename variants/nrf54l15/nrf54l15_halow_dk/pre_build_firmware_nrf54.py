@@ -6,6 +6,7 @@ Import("env")
 
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 PROJECT_DIR = Path(env.subst("$PROJECT_DIR")).resolve()
@@ -94,7 +95,44 @@ for src, dst, label in staged_files:
         shutil.copyfile(src, dst)
         print(f"Staged {label}: {dst}")
 
+sdk_bcf = mm_root / "submodules" / "mm-iot-sdk" / "framework" / "morsefirmware" / "mm6108" / "bcfs" / "bcf_HC01.mbin"
+staged_bcf = blob_dir / "firmware" / "bcf_HC01.mbin"
+sdk_bcf_src = project_bcf if project_bcf.exists() else staged_bcf
+if sdk_bcf_src.exists():
+    sdk_bcf.parent.mkdir(parents=True, exist_ok=True)
+    if not sdk_bcf.exists() or sdk_bcf_src.read_bytes() != sdk_bcf.read_bytes():
+        shutil.copyfile(sdk_bcf_src, sdk_bcf)
+        print(f"Staged HC01 BCF for SDK path: {sdk_bcf}")
+
 env["ENV"]["MORSE_SM_USE_APP_BINARIES"] = "1"
 os.environ["MORSE_SM_USE_APP_BINARIES"] = "1"
 
 print(f"Using Morse Zephyr module: {mm_root}")
+
+
+def ensure_zephyr_final_linker_script(target, source, env):
+    linker = BUILD_DIR / "zephyr" / "linker.cmd"
+    if linker.exists():
+        return
+
+    build_ninja = BUILD_DIR / "build.ninja"
+    if not build_ninja.exists():
+        return
+    lines = build_ninja.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("build zephyr/linker.cmd"):
+            for command_line in lines[index + 1 :]:
+                if command_line.startswith("  COMMAND = "):
+                    subprocess.run(command_line.removeprefix("  COMMAND = "), shell=True, check=True)
+                    if not linker.exists():
+                        raise RuntimeError(f"Generated linker command completed but {linker} is still missing")
+                    return
+            break
+
+    raise RuntimeError(f"Could not find linker.cmd generation command in {build_ninja}")
+
+
+env.AddPostAction(str(BUILD_DIR / "zephyr" / "firmware-pre0.elf"), ensure_zephyr_final_linker_script)
+for suffix in ("", ".elf"):
+    env.AddPreAction(str(BUILD_DIR / f"{env.subst('$PROGNAME')}{suffix}"), ensure_zephyr_final_linker_script)
+    env.AddPreAction(f"$BUILD_DIR/${{PROGNAME}}{suffix}", ensure_zephyr_final_linker_script)
