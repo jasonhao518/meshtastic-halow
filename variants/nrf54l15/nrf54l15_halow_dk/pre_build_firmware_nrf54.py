@@ -116,17 +116,23 @@ def ensure_zephyr_final_linker_script(target, source, env):
         return
 
     build_ninja = BUILD_DIR / "build.ninja"
+    if not build_ninja.exists():
+        return
     lines = build_ninja.read_text(encoding="utf-8").splitlines()
     for index, line in enumerate(lines):
-        if line.startswith("build zephyr/linker.cmd "):
+        if line.startswith("build zephyr/linker.cmd"):
             for command_line in lines[index + 1 :]:
                 if command_line.startswith("  COMMAND = "):
                     subprocess.run(command_line.removeprefix("  COMMAND = "), shell=True, check=True)
+                    if not linker.exists():
+                        raise RuntimeError(f"Generated linker command completed but {linker} is still missing")
                     return
             break
 
     raise RuntimeError(f"Could not find linker.cmd generation command in {build_ninja}")
 
 
+env.AddPostAction(str(BUILD_DIR / "zephyr" / "firmware-pre0.elf"), ensure_zephyr_final_linker_script)
 for suffix in ("", ".elf"):
     env.AddPreAction(str(BUILD_DIR / f"{env.subst('$PROGNAME')}{suffix}"), ensure_zephyr_final_linker_script)
+    env.AddPreAction(f"$BUILD_DIR/${{PROGNAME}}{suffix}", ensure_zephyr_final_linker_script)
