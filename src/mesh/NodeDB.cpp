@@ -384,6 +384,7 @@ NodeDB::NodeDB()
 {
     NRF54_NODEDB_LOG("Init NodeDB");
 #ifdef ARCH_NRF54
+    NRF54_NODEDB_LOG("DN");
     NRF54_NODEDB_LOG("D0");
     installDefaultNodeDatabase();
     NRF54_NODEDB_LOG("D1");
@@ -395,6 +396,7 @@ NodeDB::NodeDB()
     NRF54_NODEDB_LOG("D4");
     installDefaultChannels();
     NRF54_NODEDB_LOG("D5");
+    NRF54_NODEDB_LOG("DN:done");
 #else
     NRF54_NODEDB_LOG("NodeDB: loadFromDisk begin");
     loadFromDisk();
@@ -783,12 +785,28 @@ void NodeDB::installDefaultNodeDatabase()
     nodeDatabase.version = DEVICESTATE_CUR_VER;
     NRF54_NODEDB_LOG("D0c");
     NRF54_NODEDB_LOG("D0n:%u,%u", (unsigned)MAX_NUM_NODES, (unsigned)sizeof(meshtastic_NodeInfoLite));
+    NRF54_NODEDB_LOG("D0nbytes:%u", (unsigned)(MAX_NUM_NODES * sizeof(meshtastic_NodeInfoLite)));
+    NRF54_NODEDB_LOG("D0mem:before:%u,%u", (unsigned)memGet.getFreeHeap(), (unsigned)memGet.getHeapSize());
+    NRF54_NODEDB_LOG("D0alloc:begin");
+#ifdef ARCH_NRF54
+    NRF54_NODEDB_LOG("D0alloc:clear");
+    nodeDatabase.nodes.clear();
+    NRF54_NODEDB_LOG("D0alloc:clear_done");
+    NRF54_NODEDB_LOG("D0alloc:final");
+    NRF54_NODEDB_LOG("D0alloc:assigned:%u,%u", (unsigned)nodeDatabase.nodes.size(), (unsigned)nodeDatabase.nodes.capacity());
+#else
     nodeDatabase.nodes = std::vector<meshtastic_NodeInfoLite>(MAX_NUM_NODES);
+#endif
     NRF54_NODEDB_LOG("D0d");
     numMeshNodes = 0;
     meshNodes = &nodeDatabase.nodes;
     NRF54_NODEDB_LOG("D0e");
 #ifdef ARCH_NRF54
+    NRF54_NODEDB_LOG("D0alloc:return_path");
+    NRF54_NODEDB_LOG("D0mem:after:%u,%u", (unsigned)memGet.getFreeHeap(), (unsigned)memGet.getHeapSize());
+#endif
+#ifdef ARCH_NRF54
+    NRF54_NODEDB_LOG("D0arch54:return");
     return;
 #endif
 #ifndef ARCH_NRF54
@@ -2746,6 +2764,14 @@ meshtastic_NodeInfoLite *NodeDB::getOrCreateMeshNode(NodeNum n)
                 }
                 (numMeshNodes)--;
             }
+        }
+        // Keep nRF54 allocations lazy so we do not pre-allocate node slots during early boot.
+        if (meshNodes->size() <= (size_t)numMeshNodes) {
+            if (meshNodes->size() >= (size_t)MAX_NUM_NODES) {
+                LOG_ERROR("NodeDB full at %u entries, but storage vector has no room", (unsigned)numMeshNodes);
+                return NULL;
+            }
+            nodeDatabase.nodes.push_back(meshtastic_NodeInfoLite());
         }
         // add the node at the end
         lite = &meshNodes->at((numMeshNodes)++);
