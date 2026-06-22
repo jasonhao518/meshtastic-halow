@@ -95,6 +95,15 @@ for src, dst, label in staged_files:
         shutil.copyfile(src, dst)
         print(f"Staged {label}: {dst}")
 
+sdk_bcf = mm_root / "submodules" / "mm-iot-sdk" / "framework" / "morsefirmware" / "mm6108" / "bcfs" / "bcf_HC01.mbin"
+staged_bcf = blob_dir / "firmware" / "bcf_HC01.mbin"
+sdk_bcf_src = project_bcf if project_bcf.exists() else staged_bcf
+if sdk_bcf_src.exists():
+    sdk_bcf.parent.mkdir(parents=True, exist_ok=True)
+    if not sdk_bcf.exists() or sdk_bcf_src.read_bytes() != sdk_bcf.read_bytes():
+        shutil.copyfile(sdk_bcf_src, sdk_bcf)
+        print(f"Staged HC01 BCF for SDK path: {sdk_bcf}")
+
 env["ENV"]["MORSE_SM_USE_APP_BINARIES"] = "1"
 os.environ["MORSE_SM_USE_APP_BINARIES"] = "1"
 
