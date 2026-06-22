@@ -616,13 +616,17 @@ void HaLowInterface::onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int
 #ifdef MESHTASTIC_USE_MM_IOT_HALOW
 bool HaLowInterface::applyChannelList()
 {
+    HALOW_TRACE("HaLow: channel lookup country=%s\n", countryCode);
     const struct mmwlan_s1g_channel_list *channel_list = mmwlan_lookup_regulatory_domain(get_regulatory_db(), countryCode);
     if (!channel_list) {
         LOG_ERROR("HaLow: country %s not in regdb", countryCode);
         printf("HaLow: country %s not in regdb\n", countryCode);
         return false;
     }
-    if (mmwlan_set_channel_list(channel_list) != MMWLAN_SUCCESS) {
+    HALOW_TRACE("HaLow: set_channel_list begin country=%s channels=%u\n", countryCode, (unsigned)channel_list->num_channels);
+    enum mmwlan_status status = mmwlan_set_channel_list(channel_list);
+    HALOW_TRACE("HaLow: set_channel_list status=%d\n", (int)status);
+    if (status != MMWLAN_SUCCESS) {
         LOG_ERROR("HaLow: set_channel_list failed");
         printf("HaLow: set_channel_list failed\n");
         return false;
