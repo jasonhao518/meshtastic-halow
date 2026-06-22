@@ -399,10 +399,10 @@ NodeDB::NodeDB()
     NRF54_NODEDB_LOG("NodeDB: loadFromDisk begin");
     loadFromDisk();
     NRF54_NODEDB_LOG("NodeDB: loadFromDisk done");
-#endif
     NRF54_NODEDB_LOG("NodeDB: cleanupMeshDB begin");
     cleanupMeshDB();
     NRF54_NODEDB_LOG("NodeDB: cleanupMeshDB done");
+#endif
 
     uint32_t devicestateCRC = crc32Buffer(&devicestate, sizeof(devicestate));
     uint32_t nodeDatabaseCRC = crc32Buffer(&nodeDatabase, sizeof(nodeDatabase));
@@ -782,11 +782,15 @@ void NodeDB::installDefaultNodeDatabase()
     NRF54_NODEDB_LOG("D0b");
     nodeDatabase.version = DEVICESTATE_CUR_VER;
     NRF54_NODEDB_LOG("D0c");
+    NRF54_NODEDB_LOG("D0n:%u,%u", (unsigned)MAX_NUM_NODES, (unsigned)sizeof(meshtastic_NodeInfoLite));
     nodeDatabase.nodes = std::vector<meshtastic_NodeInfoLite>(MAX_NUM_NODES);
     NRF54_NODEDB_LOG("D0d");
     numMeshNodes = 0;
     meshNodes = &nodeDatabase.nodes;
     NRF54_NODEDB_LOG("D0e");
+#ifdef ARCH_NRF54
+    return;
+#endif
 #ifndef ARCH_NRF54
     concurrency::LockGuard satelliteGuard(&satelliteMutex);
 #endif
