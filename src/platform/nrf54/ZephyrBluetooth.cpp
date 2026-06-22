@@ -31,7 +31,7 @@ static bool appReady;
 static bool asyncStarted;
 static bool enablePending;
 static bool authRegistered;
-static constexpr size_t bleThreadStackSize = 12288;
+static constexpr size_t bleThreadStackSize = 8192;
 static constexpr unsigned int fixedPasskey = 123456;
 static uint8_t fromRadioValue[meshtastic_FromRadio_size];
 static uint16_t fromRadioValueLen;
