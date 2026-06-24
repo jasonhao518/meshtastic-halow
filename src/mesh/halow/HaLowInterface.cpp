@@ -984,6 +984,38 @@ bool HaLowInterface::findHalowMacForNextHop(uint8_t nextHop, uint8_t outMac[6], 
         }
         return true;
     }
+
+    if (nodeDB) {
+        NodeNum bestCandidate = 0;
+        uint32_t bestLastHeard = 0;
+        bool candidateFound = false;
+
+        for (size_t i = 0; i < nodeDB->getNumMeshNodes(); i++) {
+            const meshtastic_NodeInfoLite *node = nodeDB->getMeshNodeByIndex(i);
+            if (!node || node->num == nodeDB->getNodeNum()) {
+                continue;
+            }
+            if (nodeDB->getLastByteOfNodeNum(node->num) != nextHop) {
+                continue;
+            }
+            uint8_t hwModel = node->hw_model != 0 ? (uint8_t)node->hw_model : (uint8_t)(node->num >> 24);
+            if (!deriveHalowMacFromNode(node->num, hwModel, outMac)) {
+                continue;
+            }
+            if (!candidateFound || node->last_heard > bestLastHeard) {
+                bestCandidate = node->num;
+                bestLastHeard = node->last_heard;
+                candidateFound = true;
+            }
+        }
+
+        if (candidateFound) {
+            if (resolvedNode) {
+                *resolvedNode = bestCandidate;
+            }
+            return deriveHalowMacFromNode(bestCandidate, (uint8_t)(bestCandidate >> 24), outMac);
+        }
+    }
     return false;
 }
 
@@ -1034,6 +1066,11 @@ bool HaLowInterface::resolveUnicastMac(const meshtastic_MeshPacket *p, uint8_t o
     }
 
     if (findHalowMacForNode(p->to, outMac)) {
+        resolvedNodeNum = p->to;
+        return true;
+    }
+
+    if (deriveHalowMacFromNode(p->to, (uint8_t)(p->to >> 24), outMac)) {
         resolvedNodeNum = p->to;
         return true;
     }
