@@ -1518,8 +1518,13 @@ void NodeDB::pickNewNodeNum()
     NodeNum nodeNum = myNodeInfo.my_node_num;
     getLocalStableNodeSeedMac(ourMacAddr); // Make sure ourMacAddr is set
     if (nodeNum == 0) {
-        // Pick an initial nodenum based on the macaddr
-        nodeNum = (ourMacAddr[2] << 24) | (ourMacAddr[3] << 16) | (ourMacAddr[4] << 8) | ourMacAddr[5];
+        // Pick an initial nodenum based on hardware model + MAC serial bytes.
+#ifdef MESHTASTIC_HW_MODEL
+        uint8_t hwModel = (uint8_t)MESHTASTIC_HW_MODEL;
+#else
+        uint8_t hwModel = (uint8_t)HW_VENDOR;
+#endif
+        nodeNum = (NodeNum)hwModel << 24 | ourMacAddr[3] << 16 | ourMacAddr[4] << 8 | ourMacAddr[5];
     }
 
     // Identity check via public key (or "empty slot?" when no keys yet);
