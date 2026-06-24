@@ -108,6 +108,19 @@ static void bytesToHex(const uint8_t *bytes, size_t len, char *out, size_t outLe
     out[pos] = '\0';
 }
 
+static bool bytesNonzero(const uint8_t *bytes, size_t len)
+{
+    if (!bytes) {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        if (bytes[i] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void logHaLowMeshPacket(const char *direction, const uint8_t *buffer, size_t len, int rssi, bool hasRssi)
 {
     if (!buffer || len < sizeof(PacketHeader)) {
@@ -444,10 +457,18 @@ void HaLowInterface::buildDiscoveryVendorIe()
         }
         return putByte((uint8_t)len) && putBytes((const uint8_t *)s, len);
     };
+    auto putPublicKey = [&]() -> bool {
+        if (owner.public_key.size == sizeof(owner.public_key.bytes) &&
+            bytesNonzero(owner.public_key.bytes, owner.public_key.size)) {
+            return putByte((uint8_t)owner.public_key.size) && putBytes(owner.public_key.bytes, owner.public_key.size);
+        }
+        return putByte(0);
+    };
 
     if (!putByte((uint8_t)channelHash) || !putBytes((const uint8_t *)&nodeNum, sizeof(nodeNum)) ||
         !putByte((uint8_t)owner.hw_model) || !putByte((uint8_t)owner.role) || !putByte(owner.is_licensed ? 1 : 0) ||
-        !putString(owner.short_name, sizeof(owner.short_name)) || !putString(owner.long_name, sizeof(owner.long_name))) {
+        !putString(owner.short_name, sizeof(owner.short_name)) || !putString(owner.long_name, sizeof(owner.long_name)) ||
+        !putPublicKey()) {
         return;
     }
 
@@ -477,8 +498,8 @@ void HaLowInterface::buildDiscoveryVendorIe()
     }
 
     discoveryVendorIeLen = outPos;
-    LOG_INFO("HaLow: Meshtastic vendor IE ready node=0x%08x hash=0x%02x len=%u", nodeNum, (uint8_t)channelHash,
-             (unsigned)discoveryVendorIeLen);
+    LOG_INFO("HaLow: Meshtastic vendor IE ready node=0x%08x hash=0x%02x len=%u key_len=%u", nodeNum, (uint8_t)channelHash,
+             (unsigned)discoveryVendorIeLen, (unsigned)owner.public_key.size);
 }
 
 void HaLowInterface::onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int8_t rssi, const uint8_t *srcMac, size_t srcMacLen)
@@ -614,6 +635,25 @@ void HaLowInterface::onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int
         pos += len;
         return true;
     };
+    auto getOptionalPublicKey = [&](meshtastic_User &u) -> bool {
+        if (pos >= compactLen) {
+            return true;
+        }
+
+        uint8_t len = 0;
+        if (!getByte(len) || len > sizeof(u.public_key.bytes) || pos + len > compactLen) {
+            return false;
+        }
+        if (len != 0 && len != sizeof(u.public_key.bytes)) {
+            return false;
+        }
+        u.public_key.size = len;
+        if (len > 0) {
+            memcpy(u.public_key.bytes, compact + pos, len);
+            pos += len;
+        }
+        return true;
+    };
 
     uint8_t channelHash = 0;
     NodeNum nodeNum = 0;
@@ -623,19 +663,20 @@ void HaLowInterface::onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int
     meshtastic_User user = meshtastic_User_init_default;
 
     if (!getByte(channelHash) || !getBytes((uint8_t *)&nodeNum, sizeof(nodeNum)) || !getByte(hwModel) || !getByte(role) ||
-        !getByte(flags) || !getString(user.short_name, sizeof(user.short_name)) || !getString(user.long_name, sizeof(user.long_name))) {
+        !getByte(flags) || !getString(user.short_name, sizeof(user.short_name)) || !getString(user.long_name, sizeof(user.long_name)) ||
+        !getOptionalPublicKey(user)) {
         LOG_WARN("HaLow: malformed Meshtastic vendor IE payload len=%u pos=%u", (unsigned)compactLen, (unsigned)pos);
         printf("HaLow: malformed Meshtastic vendor IE payload len=%u pos=%u\n", (unsigned)compactLen, (unsigned)pos);
         return;
     }
 
     int16_t localHash = channels.getHash(channels.getPrimaryIndex());
-    LOG_INFO("HaLow: vendor NodeInfo decoded hash=0x%02x local=0x%02x node=0x%08x hw=%u role=%u flags=0x%02x short='%s' long='%s'",
-             channelHash, localHash < 0 ? 0xff : (uint8_t)localHash, nodeNum, hwModel, role, flags, user.short_name,
-             user.long_name);
-    printf("HaLow: vendor NodeInfo decoded hash=0x%02x local=0x%02x node=0x%08x hw=%u role=%u flags=0x%02x short='%s' long='%s'\n",
-           channelHash, localHash < 0 ? 0xff : (uint8_t)localHash, nodeNum, hwModel, role, flags, user.short_name,
-           user.long_name);
+    LOG_INFO("HaLow: vendor NodeInfo decoded hash=0x%02x local=0x%02x node=0x%08x hw=%u role=%u flags=0x%02x key_len=%u short='%s' long='%s'",
+             channelHash, localHash < 0 ? 0xff : (uint8_t)localHash, nodeNum, hwModel, role, flags, user.public_key.size,
+             user.short_name, user.long_name);
+    printf("HaLow: vendor NodeInfo decoded hash=0x%02x local=0x%02x node=0x%08x hw=%u role=%u flags=0x%02x key_len=%u short='%s' long='%s'\n",
+           channelHash, localHash < 0 ? 0xff : (uint8_t)localHash, nodeNum, hwModel, role, flags, user.public_key.size,
+           user.short_name, user.long_name);
 
     if (localHash < 0 || channelHash != (uint8_t)localHash) {
         LOG_INFO("HaLow: ignore vendor NodeInfo hash=0x%02x local=0x%02x", channelHash, localHash < 0 ? 0xff : (uint8_t)localHash);
