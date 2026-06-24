@@ -95,6 +95,8 @@ static size_t expandPrimaryPsk(uint8_t *out, size_t outLen)
     return pskLen;
 }
 
+static constexpr size_t HEX_PREVIEW_BYTES = 64;
+
 static void bytesToHex(const uint8_t *bytes, size_t len, char *out, size_t outLen)
 {
     static constexpr char hex[] = "0123456789abcdef";
@@ -112,7 +114,6 @@ static void logHaLowMeshPacket(const char *direction, const uint8_t *buffer, siz
         return;
     }
 
-    static constexpr size_t HEX_PREVIEW_BYTES = 64;
     const PacketHeader *h = reinterpret_cast<const PacketHeader *>(buffer);
     size_t payloadLen = len - sizeof(PacketHeader);
     size_t hexLen = std::min(len, HEX_PREVIEW_BYTES);
@@ -458,9 +459,22 @@ void HaLowInterface::buildDiscoveryVendorIe()
 
 void HaLowInterface::onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int8_t rssi)
 {
-    if (!ies || !nodeDB) {
+    if (!ies) {
+        printf("HaLow: vendor IE RX ignored null ies rssi=%d\n", rssi);
         return;
     }
+    if (!nodeDB) {
+        printf("HaLow: vendor IE RX ignored no nodeDB len=%u rssi=%d\n", (unsigned)iesLen, rssi);
+        return;
+    }
+
+    char iesHex[(HEX_PREVIEW_BYTES * 2) + 1] = {0};
+    size_t iesHexLen = std::min(iesLen, HEX_PREVIEW_BYTES);
+    bytesToHex(ies, iesHexLen, iesHex, sizeof(iesHex));
+    LOG_INFO("HaLow: vendor IE RX len=%u rssi=%d hex%u=%s%s", (unsigned)iesLen, rssi, (unsigned)iesHexLen, iesHex,
+             iesLen > iesHexLen ? "..." : "");
+    printf("HaLow: vendor IE RX len=%u rssi=%d hex%u=%s%s\n", (unsigned)iesLen, rssi, (unsigned)iesHexLen, iesHex,
+           iesLen > iesHexLen ? "..." : "");
 
     uint8_t reassembled[MAX_DISCOVERY_VENDOR_IES * MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN] = {0};
     size_t fragLens[MAX_DISCOVERY_VENDOR_IES] = {0};
@@ -473,15 +487,29 @@ void HaLowInterface::onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int
         uint8_t len = ies[off + 1];
         size_t next = off + 2 + len;
         if (next > iesLen) {
+            LOG_WARN("HaLow: vendor IE malformed element off=%u eid=0x%02x len=%u ies_len=%u", (unsigned)off, eid, len,
+                     (unsigned)iesLen);
+            printf("HaLow: vendor IE malformed element off=%u eid=0x%02x len=%u ies_len=%u\n", (unsigned)off, eid, len,
+                   (unsigned)iesLen);
             break;
         }
         const uint8_t *body = ies + off + 2;
-        if (eid == WLAN_IE_ID_VENDOR_SPECIFIC && len >= MESHTASTIC_VENDOR_HEADER_LEN &&
-            memcmp(body, MESHTASTIC_VENDOR_OUI, sizeof(MESHTASTIC_VENDOR_OUI)) == 0 &&
-            body[3] == MESHTASTIC_VENDOR_TYPE_NODEINFO && body[4] == MESHTASTIC_VENDOR_VERSION) {
-            uint8_t fragIndex = body[5];
-            uint8_t fragCount = body[6];
-            size_t fragPayloadLen = len - MESHTASTIC_VENDOR_HEADER_LEN;
+        bool isVendor = eid == WLAN_IE_ID_VENDOR_SPECIFIC && len >= MESHTASTIC_VENDOR_HEADER_LEN;
+        bool ouiMatch = isVendor && memcmp(body, MESHTASTIC_VENDOR_OUI, sizeof(MESHTASTIC_VENDOR_OUI)) == 0;
+        uint8_t vendorType = isVendor ? body[3] : 0;
+        uint8_t vendorVersion = isVendor ? body[4] : 0;
+        uint8_t fragIndex = isVendor ? body[5] : 0;
+        uint8_t fragCount = isVendor ? body[6] : 0;
+        size_t fragPayloadLen = isVendor ? len - MESHTASTIC_VENDOR_HEADER_LEN : 0;
+
+        if (isVendor) {
+            LOG_INFO("HaLow: vendor IE elem off=%u len=%u oui=%u type=%u version=%u frag=%u/%u payload=%u", (unsigned)off,
+                     len, ouiMatch ? 1 : 0, vendorType, vendorVersion, fragIndex, fragCount, (unsigned)fragPayloadLen);
+            printf("HaLow: vendor IE elem off=%u len=%u oui=%u type=%u version=%u frag=%u/%u payload=%u\n", (unsigned)off,
+                   len, ouiMatch ? 1 : 0, vendorType, vendorVersion, fragIndex, fragCount, (unsigned)fragPayloadLen);
+        }
+
+        if (ouiMatch && vendorType == MESHTASTIC_VENDOR_TYPE_NODEINFO && vendorVersion == MESHTASTIC_VENDOR_VERSION) {
             if (fragCount > 0 && fragCount <= MAX_DISCOVERY_VENDOR_IES && fragIndex < fragCount &&
                 fragPayloadLen <= MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN) {
                 expectedFrags = fragCount;
@@ -489,12 +517,24 @@ void HaLowInterface::onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int
                        body + MESHTASTIC_VENDOR_HEADER_LEN, fragPayloadLen);
                 fragLens[fragIndex] = fragPayloadLen;
                 fragSeen[fragIndex] = true;
+            } else {
+                LOG_WARN("HaLow: vendor IE reject bad fragment frag=%u/%u payload=%u max_frags=%u max_payload=%u", fragIndex,
+                         fragCount, (unsigned)fragPayloadLen, (unsigned)MAX_DISCOVERY_VENDOR_IES,
+                         (unsigned)MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN);
+                printf("HaLow: vendor IE reject bad fragment frag=%u/%u payload=%u max_frags=%u max_payload=%u\n", fragIndex,
+                       fragCount, (unsigned)fragPayloadLen, (unsigned)MAX_DISCOVERY_VENDOR_IES,
+                       (unsigned)MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN);
             }
+        } else if (isVendor) {
+            LOG_INFO("HaLow: vendor IE skip oui=%u type=%u version=%u", ouiMatch ? 1 : 0, vendorType, vendorVersion);
+            printf("HaLow: vendor IE skip oui=%u type=%u version=%u\n", ouiMatch ? 1 : 0, vendorType, vendorVersion);
         }
         off = next;
     }
 
     if (expectedFrags == 0) {
+        LOG_INFO("HaLow: vendor IE RX no Meshtastic NodeInfo fragment len=%u", (unsigned)iesLen);
+        printf("HaLow: vendor IE RX no Meshtastic NodeInfo fragment len=%u\n", (unsigned)iesLen);
         return;
     }
 
@@ -515,6 +555,14 @@ void HaLowInterface::onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int
         memcpy(compact + compactLen, reassembled + (i * MESHTASTIC_VENDOR_FRAGMENT_PAYLOAD_LEN), fragLens[i]);
         compactLen += fragLens[i];
     }
+
+    char compactHex[(HEX_PREVIEW_BYTES * 2) + 1] = {0};
+    size_t compactHexLen = std::min(compactLen, HEX_PREVIEW_BYTES);
+    bytesToHex(compact, compactHexLen, compactHex, sizeof(compactHex));
+    LOG_INFO("HaLow: vendor IE compact len=%u hex%u=%s%s", (unsigned)compactLen, (unsigned)compactHexLen, compactHex,
+             compactLen > compactHexLen ? "..." : "");
+    printf("HaLow: vendor IE compact len=%u hex%u=%s%s\n", (unsigned)compactLen, (unsigned)compactHexLen, compactHex,
+           compactLen > compactHexLen ? "..." : "");
 
     size_t pos = 0;
     auto getByte = [&](uint8_t &v) -> bool {
@@ -552,16 +600,28 @@ void HaLowInterface::onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int
 
     if (!getByte(channelHash) || !getBytes((uint8_t *)&nodeNum, sizeof(nodeNum)) || !getByte(hwModel) || !getByte(role) ||
         !getByte(flags) || !getString(user.short_name, sizeof(user.short_name)) || !getString(user.long_name, sizeof(user.long_name))) {
-        LOG_WARN("HaLow: malformed Meshtastic vendor IE payload len=%u", (unsigned)compactLen);
+        LOG_WARN("HaLow: malformed Meshtastic vendor IE payload len=%u pos=%u", (unsigned)compactLen, (unsigned)pos);
+        printf("HaLow: malformed Meshtastic vendor IE payload len=%u pos=%u\n", (unsigned)compactLen, (unsigned)pos);
         return;
     }
 
     int16_t localHash = channels.getHash(channels.getPrimaryIndex());
+    LOG_INFO("HaLow: vendor NodeInfo decoded hash=0x%02x local=0x%02x node=0x%08x hw=%u role=%u flags=0x%02x short='%s' long='%s'",
+             channelHash, localHash < 0 ? 0xff : (uint8_t)localHash, nodeNum, hwModel, role, flags, user.short_name,
+             user.long_name);
+    printf("HaLow: vendor NodeInfo decoded hash=0x%02x local=0x%02x node=0x%08x hw=%u role=%u flags=0x%02x short='%s' long='%s'\n",
+           channelHash, localHash < 0 ? 0xff : (uint8_t)localHash, nodeNum, hwModel, role, flags, user.short_name,
+           user.long_name);
+
     if (localHash < 0 || channelHash != (uint8_t)localHash) {
-        LOG_DEBUG("HaLow: ignore vendor NodeInfo hash=0x%02x local=0x%02x", channelHash, (uint8_t)localHash);
+        LOG_INFO("HaLow: ignore vendor NodeInfo hash=0x%02x local=0x%02x", channelHash, localHash < 0 ? 0xff : (uint8_t)localHash);
+        printf("HaLow: ignore vendor NodeInfo hash=0x%02x local=0x%02x\n", channelHash,
+               localHash < 0 ? 0xff : (uint8_t)localHash);
         return;
     }
     if (nodeNum == 0 || nodeNum == nodeDB->getNodeNum()) {
+        LOG_INFO("HaLow: ignore vendor NodeInfo node=0x%08x local=0x%08x", nodeNum, nodeDB->getNodeNum());
+        printf("HaLow: ignore vendor NodeInfo node=0x%08x local=0x%08x\n", nodeNum, nodeDB->getNodeNum());
         return;
     }
 
