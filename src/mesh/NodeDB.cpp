@@ -61,6 +61,12 @@
 #include <MeshtasticOTA.h>
 #endif
 
+#ifdef USE_MM_IOT_ESP32
+extern "C" {
+#include "mmwlan.h"
+}
+#endif
+
 NodeDB *nodeDB = nullptr;
 
 // we have plenty of ram so statically alloc this tempbuf (for now)
@@ -355,6 +361,17 @@ uint32_t radioGeneration;
 // FIXME - move this somewhere else
 extern void getMacAddr(uint8_t *dmac);
 
+static bool getLocalStableNodeSeedMac(uint8_t outMac[6])
+{
+#ifdef USE_MM_IOT_ESP32
+    if (mmwlan_get_mac_addr(outMac) == MMWLAN_SUCCESS) {
+        return true;
+    }
+#endif
+    getMacAddr(outMac);
+    return true;
+}
+
 /**
  *
  * Normally userids are unique and start with +country code to look like Signal phone numbers.
@@ -429,7 +446,11 @@ NodeDB::NodeDB()
     pickNewNodeNum();
 
     // Set our board type so we can share it with others
+#ifdef MESHTASTIC_HW_MODEL
+    owner.hw_model = (meshtastic_HardwareModel)MESHTASTIC_HW_MODEL;
+#else
     owner.hw_model = HW_VENDOR;
+#endif
     // Ensure user (nodeinfo) role is set to whatever we're configured to
     owner.role = config.device.role;
     // Ensure macaddr is set to our macaddr as it will be copied in our info below
@@ -1495,7 +1516,7 @@ void NodeDB::installDefaultDeviceState()
 void NodeDB::pickNewNodeNum()
 {
     NodeNum nodeNum = myNodeInfo.my_node_num;
-    getMacAddr(ourMacAddr); // Make sure ourMacAddr is set
+    getLocalStableNodeSeedMac(ourMacAddr); // Make sure ourMacAddr is set
     if (nodeNum == 0) {
         // Pick an initial nodenum based on the macaddr
         nodeNum = (ourMacAddr[2] << 24) | (ourMacAddr[3] << 16) | (ourMacAddr[4] << 8) | ourMacAddr[5];

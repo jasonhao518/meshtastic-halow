@@ -17,3 +17,11 @@ else:
 print(f"PROGNAME: {env.get('PROGNAME')}")
 if platform.name == "espressif32":
     print(f"ESP32_FS_IMAGE_NAME: {env.get('ESP32_FS_IMAGE_NAME')}")
+
+# Consume the custom metadata as a compile-time hardware model selector.
+hw_model = env.GetProjectOption("custom_meshtastic_hw_model", None)
+if hw_model:
+    try:
+        env.Append(CPPDEFINES=[("MESHTASTIC_HW_MODEL", int(hw_model))])
+    except Exception as ex:
+        print(f"Invalid custom_meshtastic_hw_model={hw_model!r}: {ex}")

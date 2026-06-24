@@ -137,6 +137,29 @@ static void logHaLowMeshPacket(const char *direction, const uint8_t *buffer, siz
 }
 
 #ifdef USE_MM_IOT_ESP32
+struct HalowHwModelMacPrefix {
+    uint8_t hwModel;
+    uint8_t prefix[3];
+};
+
+static constexpr HalowHwModelMacPrefix halowHwModelMacPrefixes[] = {
+    {meshtastic_HardwareModel_HELTEC_V3, {0xB4, 0x3A, 0x45}},
+};
+
+static bool getHalowMacPrefixForHwModel(uint8_t hwModel, uint8_t outPrefix[3])
+{
+    if (!outPrefix) {
+        return false;
+    }
+    for (const auto &entry : halowHwModelMacPrefixes) {
+        if (entry.hwModel == hwModel) {
+            memcpy(outPrefix, entry.prefix, sizeof(entry.prefix));
+            return true;
+        }
+    }
+    return false;
+}
+
 static const char *staEventToStr(enum mmwlan_sta_event evt)
 {
     switch (evt) {
@@ -195,7 +218,8 @@ void HaLowInterface::rxTrampoline(uint8_t *header, unsigned header_len, uint8_t 
     if (et != ETHERTYPE_MESHTASTIC_HALOW) {
         return;
     }
-    self->onFrameReceived(payload, payload_len, /*rssi*/ 0);
+    const uint8_t *srcMac = header + 6;
+    self->onFrameReceived(payload, payload_len, /*rssi*/ 0, srcMac, 6);
 }
 
 void HaLowInterface::scanRxTrampoline(const struct mmwlan_scan_result *result, void *arg)
@@ -457,7 +481,7 @@ void HaLowInterface::buildDiscoveryVendorIe()
              (unsigned)discoveryVendorIeLen);
 }
 
-void HaLowInterface::onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int8_t rssi)
+void HaLowInterface::onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int8_t rssi, const uint8_t *srcMac, size_t srcMacLen)
 {
     if (!ies) {
         printf("HaLow: vendor IE RX ignored null ies rssi=%d\n", rssi);
@@ -634,6 +658,9 @@ void HaLowInterface::onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int
     meshPeerSeen = true;
     nodeInfoPingPending = true;
     lastMeshInfoMs = millis();
+    if (srcMacLen >= 6) {
+        cachePeerMac(nodeNum, srcMac, hwModel);
+    }
     LOG_INFO("HaLow: vendor NodeInfo %s node=0x%08x short='%s' long='%s' rssi=%d", changed ? "updated" : "seen",
              nodeNum, user.short_name, user.long_name, rssi);
     printf("HaLow: vendor NodeInfo %s node=0x%08x short='%s' long='%s' rssi=%d\n", changed ? "updated" : "seen", nodeNum,
@@ -760,8 +787,14 @@ ErrorCode HaLowInterface::send(meshtastic_MeshPacket *p)
 
     logHaLowMeshPacket("tx", reinterpret_cast<const uint8_t *>(&radioBuffer), encoded, 0, false);
 
-    // Ethernet header: DA(6) || SA(6) || EtherType(2, big-endian).
-    memcpy(txbuf, HALOW_BROADCAST_MAC, 6);
+    NodeNum resolvedNodeNum = 0;
+    if (resolveUnicastMac(p, txbuf, resolvedNodeNum)) {
+        LOG_INFO("HaLow: tx unicast node=0x%08x via node=0x%08x", p->to, resolvedNodeNum);
+    } else {
+        // Keep existing mesh behavior if the destination map is incomplete.
+        memcpy(txbuf, HALOW_BROADCAST_MAC, 6);
+    }
+
     if (mmwlan_get_mac_addr(txbuf + 6) != MMWLAN_SUCCESS) {
         memset(txbuf + 6, 0, 6); // fallback so the frame still goes out
     }
@@ -826,6 +859,187 @@ bool HaLowInterface::requestLocalMeshScan()
     return false;
 #endif
 }
+
+#ifdef USE_MM_IOT_ESP32
+bool HaLowInterface::getLocalHalowMac(uint8_t outMac[6]) const
+{
+    return mmwlan_get_mac_addr(outMac) == MMWLAN_SUCCESS;
+}
+
+bool HaLowInterface::findHalowMacForNode(NodeNum nodeNum, uint8_t outMac[6]) const
+{
+    if (nodeNum == 0) {
+        return false;
+    }
+    if (nodeDB && nodeNum == nodeDB->getNodeNum()) {
+        return getLocalHalowMac(outMac);
+    }
+    auto it = peerMacCache.find(nodeNum);
+    if (it != peerMacCache.end()) {
+        memcpy(outMac, it->second.mac, 6);
+        return true;
+    }
+
+    meshtastic_NodeInfoLite *peer = nodeDB ? nodeDB->getMeshNode(nodeNum) : nullptr;
+    if (!peer) {
+        return false;
+    }
+    return findHalowMacForNodeAlias(nodeNum, peer->hw_model, outMac);
+}
+
+bool HaLowInterface::deriveHalowMacFromNode(NodeNum nodeNum, uint8_t hwModel, uint8_t outMac[6]) const
+{
+    if (nodeNum == 0) {
+        return false;
+    }
+
+    if (!outMac) {
+        return false;
+    }
+
+    uint8_t prefix[3];
+    if (getHalowMacPrefixForHwModel(hwModel, prefix)) {
+        memcpy(outMac, prefix, sizeof(prefix));
+        outMac[3] = (uint8_t)(nodeNum >> 16);
+        outMac[4] = (uint8_t)(nodeNum >> 8);
+        outMac[5] = (uint8_t)nodeNum;
+        return true;
+    }
+
+    // Prefix bytes carry the model identity for deterministic reverse lookup.
+    outMac[0] = 0x02; // Locally-administered, unicast.
+    outMac[1] = hwModel;
+    outMac[2] = (uint8_t)(nodeNum >> 24);
+    outMac[3] = (uint8_t)(nodeNum >> 16);
+    outMac[4] = (uint8_t)(nodeNum >> 8);
+    outMac[5] = (uint8_t)nodeNum;
+    return true;
+}
+
+bool HaLowInterface::findHalowMacForNodeAlias(NodeNum nodeNum, uint8_t hwModel, uint8_t outMac[6]) const
+{
+    if (nodeNum == 0) {
+        return false;
+    }
+    uint8_t nodeIdLow = nodeDB ? nodeDB->getLastByteOfNodeNum(nodeNum) : (uint8_t)(nodeNum & 0xFF);
+    if (nodeIdLow == 0) {
+        nodeIdLow = 0xFF;
+    }
+    auto it = peerAliasCache.find(makeAliasKey(hwModel, nodeIdLow));
+    if (it == peerAliasCache.end()) {
+        return deriveHalowMacFromNode(nodeNum, hwModel, outMac);
+    }
+    memcpy(outMac, it->second.mac, 6);
+    return true;
+}
+
+bool HaLowInterface::findHalowMacForNextHop(uint8_t nextHop, uint8_t outMac[6], NodeNum *resolvedNode) const
+{
+    if (resolvedNode) {
+        *resolvedNode = 0;
+    }
+    if (nextHop == NO_NEXT_HOP_PREFERENCE) {
+        return false;
+    }
+    if (nodeDB && nextHop != NO_NEXT_HOP_PREFERENCE && nodeDB->getLastByteOfNodeNum(nodeDB->getNodeNum()) == nextHop) {
+        if (getLocalHalowMac(outMac)) {
+            if (resolvedNode) {
+                *resolvedNode = nodeDB->getNodeNum();
+            }
+            return true;
+        }
+    }
+
+    NodeNum bestNode = 0;
+    bool found = false;
+    uint32_t nowMs = millis();
+    uint32_t bestAge = 0;
+    for (const auto &entry : peerMacCache) {
+        if (nodeDB && nodeDB->getLastByteOfNodeNum(entry.first) == nextHop) {
+            uint32_t age = entry.second.lastSeenMs == 0 ? UINT32_MAX : nowMs - entry.second.lastSeenMs;
+            if (!found || age < bestAge) {
+                memcpy(outMac, entry.second.mac, 6);
+                bestNode = entry.first;
+                bestAge = age;
+                found = true;
+            }
+        }
+    }
+    for (const auto &entry : peerAliasCache) {
+        uint8_t aliasLow = (uint8_t)(entry.first & 0x00FF);
+        if (aliasLow != nextHop) {
+            continue;
+        }
+        uint32_t age = entry.second.lastSeenMs == 0 ? UINT32_MAX : nowMs - entry.second.lastSeenMs;
+        if (!found || age < bestAge) {
+            memcpy(outMac, entry.second.mac, 6);
+            bestNode = 0;
+            bestAge = age;
+            found = true;
+        }
+    }
+    if (found) {
+        if (resolvedNode) {
+            *resolvedNode = bestNode;
+        }
+        return true;
+    }
+    return false;
+}
+
+uint16_t HaLowInterface::makeAliasKey(uint8_t hardwareId, uint8_t nodeIdLowByte)
+{
+    return (uint16_t)(((uint16_t)hardwareId << 8) | nodeIdLowByte);
+}
+
+void HaLowInterface::cachePeerMac(NodeNum nodeNum, const uint8_t *mac, uint8_t hwModel)
+{
+    if (nodeNum == 0 || !mac) {
+        return;
+    }
+    if (nodeNum == NODENUM_BROADCAST) {
+        return;
+    }
+    PeerMacCacheEntry &entry = peerMacCache[nodeNum];
+    memcpy(entry.mac, mac, 6);
+    entry.lastSeenMs = millis();
+
+    if (hwModel == 0 && nodeDB && nodeNum != nodeDB->getNodeNum()) {
+        meshtastic_NodeInfoLite *peer = nodeDB ? nodeDB->getMeshNode(nodeNum) : nullptr;
+        if (peer) {
+            hwModel = peer->hw_model;
+        }
+    }
+    if (hwModel == 0) {
+        return;
+    }
+    uint8_t nodeIdLow = nodeDB ? nodeDB->getLastByteOfNodeNum(nodeNum) : 0;
+    if (nodeIdLow == 0) {
+        return;
+    }
+    PeerMacCacheEntry &aliasEntry = peerAliasCache[makeAliasKey(hwModel, nodeIdLow)];
+    memcpy(aliasEntry.mac, mac, 6);
+    aliasEntry.lastSeenMs = entry.lastSeenMs;
+}
+
+bool HaLowInterface::resolveUnicastMac(const meshtastic_MeshPacket *p, uint8_t outMac[6], NodeNum &resolvedNodeNum) const
+{
+    resolvedNodeNum = 0;
+    if (!p || p->to == NODENUM_BROADCAST || p->to == 0) {
+        return false;
+    }
+
+    if (findHalowMacForNextHop(p->next_hop, outMac, &resolvedNodeNum)) {
+        return true;
+    }
+
+    if (findHalowMacForNode(p->to, outMac)) {
+        resolvedNodeNum = p->to;
+        return true;
+    }
+    return false;
+}
+#endif
 
 int32_t HaLowInterface::runOnce()
 {
@@ -998,7 +1212,7 @@ void HaLowInterface::onMeshScanResult(const struct mmwlan_scan_result *result)
     size_t targetLen = strnlen(this->meshId, MMWLAN_SSID_MAXLEN);
     bool meshIdMatches = meshId && meshIdLen == targetLen && memcmp(meshId, this->meshId, targetLen) == 0;
     staScanResultCount++;
-    onDiscoveryVendorIes(result->ies, result->ies_len, result->rssi);
+    onDiscoveryVendorIes(result->ies, result->ies_len, result->rssi, result->bssid, 6);
     LOG_INFO("HaLow: scan result bssid=%02x:%02x:%02x:%02x:%02x:%02x rssi=%d ies=%u mesh_id='%.*s' match=%u mesh_cfg=%u",
              result->bssid[0], result->bssid[1], result->bssid[2], result->bssid[3], result->bssid[4], result->bssid[5],
              result->rssi, (unsigned)result->ies_len, (int)meshIdLen, meshId ? (const char *)meshId : "",
@@ -1044,7 +1258,7 @@ void HaLowInterface::onMeshScanComplete(enum mmwlan_scan_state scan_state)
 }
 #endif
 
-void HaLowInterface::onFrameReceived(const uint8_t *payload, size_t payload_len, int8_t rssi)
+void HaLowInterface::onFrameReceived(const uint8_t *payload, size_t payload_len, int8_t rssi, const uint8_t *srcMac, size_t srcMacLen)
 {
     if (!payload || payload_len < sizeof(PacketHeader)) {
         LOG_WARN("HaLow: rx data too short len=%u", (unsigned)payload_len);
@@ -1063,8 +1277,13 @@ void HaLowInterface::onFrameReceived(const uint8_t *payload, size_t payload_len,
         return;
     }
 
-    // Unpack the RadioBuffer into a MeshPacket (mirrors the LoRa RX decode).
     const PacketHeader *h = reinterpret_cast<const PacketHeader *>(payload);
+#ifdef USE_MM_IOT_ESP32
+    if (srcMacLen >= 6) {
+        cachePeerMac(h->from, srcMac);
+    }
+#endif
+    // Unpack the RadioBuffer into a MeshPacket (mirrors the LoRa RX decode).
     p->from = h->from;
     p->to = h->to;
     p->id = h->id;

@@ -5,6 +5,7 @@
 #include "concurrency/OSThread.h"
 #include <stddef.h>
 #include <stdint.h>
+#include <map>
 
 #ifdef USE_MM_IOT_ESP32
 extern "C" {
@@ -83,8 +84,10 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
     char meshKey[65] = {0};
     char countryCode[3] = {0};
 
-    void onFrameReceived(const uint8_t *payload, size_t payload_len, int8_t rssi);
-    void onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int8_t rssi);
+    void onFrameReceived(const uint8_t *payload, size_t payload_len, int8_t rssi, const uint8_t *srcMac = nullptr,
+                        size_t srcMacLen = 0);
+    void onDiscoveryVendorIes(const uint8_t *ies, size_t iesLen, int8_t rssi, const uint8_t *srcMac = nullptr,
+                              size_t srcMacLen = 0);
     void buildDiscoveryVendorIe();
     bool startMeshInfoRequest();
     bool loadMeshProfile();
@@ -92,8 +95,22 @@ class HaLowInterface : public RadioInterface, private concurrency::OSThread
 #ifdef USE_MM_IOT_ESP32
     bool applyChannelList();
     bool startMeshStation();
+    bool findHalowMacForNode(NodeNum nodeNum, uint8_t outMac[6]) const;
+    bool findHalowMacForNodeAlias(NodeNum nodeNum, uint8_t hwModel, uint8_t outMac[6]) const;
+    bool deriveHalowMacFromNode(NodeNum nodeNum, uint8_t hwModel, uint8_t outMac[6]) const;
+    bool findHalowMacForNextHop(uint8_t nextHop, uint8_t outMac[6], NodeNum *resolvedNode = nullptr) const;
+    bool getLocalHalowMac(uint8_t outMac[6]) const;
+    bool resolveUnicastMac(const meshtastic_MeshPacket *p, uint8_t outMac[6], NodeNum &resolvedNodeNum) const;
+    void cachePeerMac(NodeNum nodeNum, const uint8_t *mac, uint8_t hwModel = 0);
 
     struct mmwlan_beacon_vendor_ie_filter beaconVendorIeFilter = {};
+    struct PeerMacCacheEntry {
+        uint8_t mac[6];
+        uint32_t lastSeenMs = 0;
+    };
+    static uint16_t makeAliasKey(uint8_t hardwareId, uint8_t nodeIdLowByte);
+    std::map<NodeNum, PeerMacCacheEntry> peerMacCache;
+    std::map<uint16_t, PeerMacCacheEntry> peerAliasCache;
     uint8_t meshScanIes[2 + MMWLAN_SSID_MAXLEN + sizeof(discoveryVendorIe)] = {0};
     struct mmwlan_scan_req meshScanReq = MMWLAN_SCAN_REQ_INIT;
 
