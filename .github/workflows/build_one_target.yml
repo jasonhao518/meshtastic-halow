@@ -42,6 +42,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.branch || github.ref_name }}
+          token: ${{ github.token }}
       - uses: actions/setup-python@v6
         with:
           python-version: 3.x
@@ -88,6 +89,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.branch || github.ref_name }}
+          token: ${{ github.token }}
       - name: Get release version string
         run: |
           echo "long=$(./bin/buildinfo.py long)" >> $GITHUB_OUTPUT
@@ -103,6 +105,7 @@ jobs:
     if: ${{ inputs.target != '' && inputs.arch != 'native' }}
     needs: [version, find-targets]
     uses: ./.github/workflows/build_firmware.yml
+    secrets: inherit
     with:
       version: ${{ needs.version.outputs.long }}
       pio_env: ${{ inputs.target }}
@@ -121,6 +124,7 @@ jobs:
         with:
           ref: ${{ inputs.branch || github.event.pull_request.head.ref || github.ref_name }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          token: ${{ github.token }}
 
       - uses: actions/download-artifact@v8
         with:

@@ -31,6 +31,7 @@ jobs:
         with:
           submodules: recursive
           ref: ${{ inputs.git_ref || github.ref_name }}
+          token: ${{ github.token }}
 
       - name: Build ${{ inputs.platform }}
         id: build
