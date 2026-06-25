@@ -50,6 +50,8 @@ jobs:
 
       - name: Package merged binary as meshtastic.bin
         id: package
+        env:
+          GH_TOKEN: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
           VERSION="$(./bin/buildinfo.py long)"
@@ -65,6 +67,19 @@ jobs:
           echo "firmware=release/meshtastic.bin" >> "$GITHUB_OUTPUT"
 
           RELEASE_TAG="${{ inputs.release_tag }}"
+          if [[ -z "$RELEASE_TAG" ]]; then
+            if [[ -z "${GH_TOKEN:-}" ]]; then
+              echo "::error::GH_PERSONAL_ACCESS_TOKEN is required when release_tag is empty to resolve latest release."
+              exit 1
+            fi
+
+            RELEASE_TAG="$(gh api repos/${TARGET_RELEASE_REPO}/releases/latest --jq .tag_name)"
+            if [[ -z "$RELEASE_TAG" || "$RELEASE_TAG" == "null" ]]; then
+              echo "::error::Unable to resolve latest release tag from ${TARGET_RELEASE_REPO}."
+              exit 1
+            fi
+          fi
+
           if [[ -z "$RELEASE_TAG" ]]; then
             RELEASE_TAG="v${VERSION}"
           fi
