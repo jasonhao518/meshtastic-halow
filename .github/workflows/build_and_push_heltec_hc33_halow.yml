@@ -30,8 +30,18 @@ jobs:
       TARGET_RELEASE_REPO: edgez-ai/edge-device-esp32
 
     steps:
+      - name: Validate token for private submodules and external publish
+        env:
+          GH_PERSONAL_ACCESS_TOKEN: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+        run: |
+          if [[ -z "${GH_PERSONAL_ACCESS_TOKEN:-}" ]]; then
+            echo "::error::GH_PERSONAL_ACCESS_TOKEN is required for private submodule checkout and external repository publishing."
+            exit 1
+          fi
+
       - uses: actions/checkout@v6
         with:
+          token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           submodules: recursive
 
       - name: Set up Python and dependencies
