@@ -4,17 +4,28 @@
 
 #include <Arduino.h>
 
-uint32_t getPositionPrecisionForChannel(uint8_t channelIndex)
+uint32_t getPositionPrecisionForChannel(const meshtastic_Channel &channel)
 {
-    const meshtastic_Channel &channel = channels.getByIndex(channelIndex);
-
     if (channel.settings.has_module_settings) {
         return channel.settings.module_settings.position_precision;
-    } else if (channel.role == meshtastic_Channel_Role_PRIMARY) {
-        return 32;
-    } else {
-        return 0;
     }
+    // No module settings: fail closed. A PRIMARY channel used to default to 32
+    // here, leaking an exact position on a sharing-disabled channel. See #10509.
+    return 0;
+}
+
+uint32_t getPositionPrecisionForChannel(uint8_t channelIndex)
+{
+    const meshtastic_Channel &ch = channels.getByIndex(channelIndex);
+    if (ch.role == meshtastic_Channel_Role_DISABLED)
+        return 0;
+    uint32_t precision = getPositionPrecisionForChannel(ch);
+
+    // Never send a precise position on a publicly-decryptable channel (key check is gated on > ceiling).
+    if (precision > MAX_POSITION_PRECISION_PUBLIC_KEY && channels.usesPublicKey(channelIndex)) {
+        precision = MAX_POSITION_PRECISION_PUBLIC_KEY;
+    }
+    return precision;
 }
 
 static int32_t truncateCoordinate(int32_t coordinate, uint32_t precision)

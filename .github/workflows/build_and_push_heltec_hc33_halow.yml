@@ -1,0 +1,65 @@
+name: Build and push Heltec HC33 HaLow
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Target release tag in edge-device-esp32 (for example v2.7.15.abcdef). Leave empty to use current local version."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: resolve
+        name: Resolve version and release tag
+        run: |
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            TAG="${{ inputs.release_tag }}"
+          else
+            TAG="v$(./bin/buildinfo.py long)"
+          fi
+          VERSION="${TAG#v}"
+          echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    uses: ./.github/workflows/build_firmware.yml
+    with:
+      version: ${{ needs.resolve.outputs.version }}
+      pio_env: heltec-hc33-halow
+      platform: esp32s3
+
+  push:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download built firmware
+        uses: actions/download-artifact@v8
+        with:
+          pattern: firmware-esp32s3-heltec-hc33-halow-${{ needs.resolve.outputs.version }}
+          merge-multiple: true
+          path: ./output
+      - name: Package release asset
+        run: |
+          cd output
+          zip -j -9 -r ../heltec-hc33-halow-${{ needs.resolve.outputs.version }}.zip .
+      - name: Push to edge-device-esp32 release
+        env:
+          TARGET_REPO: meshtastic/edge-device-esp32
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          GH_TOKEN: ${{ secrets.EDGE_DEVICE_ESP32_TOKEN }}
+        run: |
+          gh release upload "$RELEASE_TAG" ./heltec-hc33-halow-${{ needs.resolve.outputs.version }}.zip --repo "$TARGET_REPO" --clobber
