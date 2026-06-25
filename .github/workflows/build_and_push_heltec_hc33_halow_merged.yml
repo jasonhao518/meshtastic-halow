@@ -1,0 +1,33 @@
+name: Build and Push heltec-hc33-halow (merged) via internal workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Source branch to build"
+        required: false
+        default: main
+      target:
+        description: "Target environment"
+        required: false
+        default: heltec-hc33-halow
+      platform:
+        description: "Platform string"
+        required: false
+        default: esp32s3
+      release_tag:
+        description: "Release tag to upload (optional)"
+        required: false
+        default: ""
+
+permissions: read-all
+
+jobs:
+  build_and_push_merged:
+    uses: jasonhao518/edge-device-esp32-internal/.github/workflows/build_and_push_heltec_hc33_halow.yml@edge-device-esp32-internal
+    with:
+      branch: ${{ inputs.branch }}
+      target: ${{ inputs.target }}
+      platform: ${{ inputs.platform }}
+      release_tag: ${{ inputs.release_tag }}
+    secrets: inherit
