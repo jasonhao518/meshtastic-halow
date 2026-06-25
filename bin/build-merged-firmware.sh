@@ -166,30 +166,10 @@ else
   fi
 
   OTA_BIN="${OUTDIR}/mt-${MCU}-ota.bin"
-  APP_OFFSET=$(manifest_value '[.part // [] | map(select(.subtype=="app0" or .name=="app0" or .subtype=="app" or .name=="app") | .offset) | .[0]' || echo "0x10000")
   SPIFFS_OFFSET=$(manifest_value '[.part // [] | map(select(.subtype=="spiffs" or .name=="spiffs" or .name=="littlefs") | .offset) | .[0]' || echo "0x300000")
   OTA_OFFSET=$(manifest_value '[.part // [] | map(select(.subtype=="ota_1") | .offset) | .[0]' || echo "0x260000")
-  BOOT_OFFSET=$(manifest_value '[.part // [] | map(select(.subtype=="bootloader" or .name=="bootloader") | .offset) | .[0]' || echo "0x1000")
-  PART_OFFSET=$(manifest_value '[.part // [] | map(select(.subtype=="partition" or .name=="partition-table" or .name=="partitions" or .subtype=="partition-table") | .offset) | .[0]' || echo "0x8000")
-  NVS_OFFSET=$(manifest_value '[.part // [] | map(select(.subtype=="nvs" or .name=="nvs") | .offset) | .[0]' || echo "0x9000")
 
-  MERGE_ARGS=()
-  if [ -f "$BOOTLOADER_BIN" ]; then
-    MERGE_ARGS+=("$BOOT_OFFSET" "$BOOTLOADER_BIN")
-  fi
-  if [ -f "$PARTITION_BIN" ]; then
-    MERGE_ARGS+=("$PART_OFFSET" "$PARTITION_BIN")
-  fi
-  if [ -f "$NVS_BIN" ]; then
-    MERGE_ARGS+=("$NVS_OFFSET" "$NVS_BIN")
-  fi
-  if [ -f "$APP_BIN" ]; then
-    MERGE_ARGS+=("$APP_OFFSET" "$APP_BIN")
-  else
-    echo "Warning: app bin missing; using factory image only."
-    cp "$FACTORY_BIN" "$WEBIMAGE"
-    MERGE_ARGS=()
-  fi
+  MERGE_ARGS=("0x0" "$FACTORY_BIN")
   if [ -f "$OTA_BIN" ]; then
     MERGE_ARGS+=("$OTA_OFFSET" "$OTA_BIN")
   fi
