@@ -3,6 +3,11 @@ name: Build One Target
 on:
   workflow_dispatch:
     inputs:
+      branch:
+        type: string
+        required: false
+        description: Branch/tag/commit to build from (defaults to currently selected ref)
+        default: ""
       # trunk-ignore(checkov/CKV_GHA_7)
       target:
         type: string
@@ -35,6 +40,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.branch || github.ref_name }}
       - uses: actions/setup-python@v6
         with:
           python-version: 3.x
@@ -79,6 +86,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.branch || github.ref_name }}
       - name: Get release version string
         run: |
           echo "long=$(./bin/buildinfo.py long)" >> $GITHUB_OUTPUT
@@ -98,6 +107,7 @@ jobs:
       version: ${{ needs.version.outputs.long }}
       pio_env: ${{ inputs.target }}
       platform: ${{ needs.find-targets.outputs.arch }}
+      git_ref: ${{ inputs.branch || github.ref_name }}
 
   gather-artifacts:
     permissions:
@@ -109,8 +119,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          ref: ${{github.event.pull_request.head.ref}}
-          repository: ${{github.event.pull_request.head.repo.full_name}}
+          ref: ${{ inputs.branch || github.event.pull_request.head.ref || github.ref_name }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
 
       - uses: actions/download-artifact@v8
         with:
