@@ -3,10 +3,6 @@ name: Build and Push heltec-hc33-halow (merged)
 on:
   workflow_dispatch:
     inputs:
-      branch:
-        description: "Source branch to build"
-        required: false
-        default: main
       target:
         description: "Target environment"
         required: false
@@ -36,7 +32,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.branch }}
           submodules: recursive
 
       - name: Set up Python and dependencies
