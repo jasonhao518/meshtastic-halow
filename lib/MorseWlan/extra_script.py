@@ -6,6 +6,8 @@ Meshtastic shims.
 import os
 import re
 import subprocess
+import ssl
+import shutil
 import urllib.request
 
 Import("env")
@@ -82,7 +84,24 @@ def _toolchain_program(suffix):
 def _download_file(url, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     print(f"Downloading {url}")
-    urllib.request.urlretrieve(url, path)
+    try:
+        urllib.request.urlretrieve(url, path)
+        return
+    except Exception as first_err:
+        print(f"Secure download failed ({first_err}); retrying with fallback methods.")
+
+    try:
+        with urllib.request.urlopen(url, context=ssl._create_unverified_context(), timeout=120) as response:
+            with open(path, "wb") as out_file:
+                out_file.write(response.read())
+        return
+    except Exception as fallback_err:
+        print(f"Unverified HTTPS download failed ({fallback_err}); trying curl.")
+
+    curl = shutil.which("curl")
+    if not curl:
+        raise
+    _run([curl, "--fail", "--location", "--show-error", "--silent", "--output", path, url])
 
 
 def _build_mbin_object(target, source, env):
