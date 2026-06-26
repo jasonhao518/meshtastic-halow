@@ -1,21 +1,28 @@
 """
-Build the Morse Micro mm-iot-esp32 SDK wrapper from the git submodule on demand.
-
-PlatformIO is not consuming the SDK's ESP-IDF CMake components here, so this
-script compiles the ESP32 shim/support sources, merges them with the SDK's
-Morselib archive into a build-local archive, and converts the selected firmware
-and BCF blobs into linkable objects.
+Build the EdgeZ HaLow wrapper from the precompiled SDK archive and local
+Meshtastic shims.
 """
 
 import os
 import re
 import subprocess
+import urllib.request
 
 Import("env")
 
 PROJECT_DIR = env.subst("$PROJECT_DIR")
 BUILD_DIR = env.subst("$BUILD_DIR")
 SDK_DIR = os.path.join(PROJECT_DIR, "third_party", "mm-iot-esp32", "framework")
+LIBMORSE_DIR = os.path.join(PROJECT_DIR, "lib", "MorseWlan", "lib", "esp32-xtensa-lx7")
+LOCAL_SOURCE_DIR = os.path.join(PROJECT_DIR, "lib", "MorseWlan", "src")
+LOCAL_INCLUDE_DIR = os.path.join(PROJECT_DIR, "lib", "MorseWlan", "include")
+HALOW_LIB_VERSION = "v0.0.3"
+HALOW_LIB_NAME = "libedgez-esp32s3.a"
+HALOW_LIB_URL = (
+    "https://github.com/edgez-ai/halow-sdk/releases/download/"
+    f"{HALOW_LIB_VERSION}/{HALOW_LIB_NAME}"
+)
+HALOW_LIB_LOCAL = os.path.join(LIBMORSE_DIR, HALOW_LIB_NAME)
 SDK_MORSELIB = os.path.join(SDK_DIR, "morselib")
 SDK_SHIMS = os.path.join(SDK_DIR, "mm_shims")
 SDK_SRC = os.path.join(SDK_DIR, "src")
@@ -70,6 +77,12 @@ def _toolchain_program(suffix):
     ar = env.subst("$AR")
     prefix = re.sub(r"(gcc-)?ar$", "", ar)
     return prefix + suffix
+
+
+def _download_file(url, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    print(f"Downloading {url}")
+    urllib.request.urlretrieve(url, path)
 
 
 def _build_mbin_object(target, source, env):
@@ -181,49 +194,42 @@ def _strip_lto_flags(build_env):
         build_env[key] = [flag for flag in flags if not str(flag).startswith("-flto")]
 
 
-if not os.path.isdir(SDK_DIR):
-    raise RuntimeError("third_party/mm-iot-esp32 submodule is missing; run git submodule update --init --recursive")
-
 target = "esp32s3"
 source_build_morse = _define_enabled("CONFIG_BUILD_MORSELIB_FROM_SOURCE")
-libmorse = os.path.join(OUT_DIR, "libmorse_source.a") if source_build_morse else os.path.join(SDK_MORSELIB, "lib", target, "libmorse.a")
-if not source_build_morse and not os.path.isfile(libmorse):
-    raise RuntimeError(f"missing mm-iot-esp32 Morselib archive: {libmorse}")
+if source_build_morse and not os.path.isdir(SDK_DIR):
+    raise RuntimeError("CONFIG_BUILD_MORSELIB_FROM_SOURCE requires the legacy mm-iot-esp32 source tree, which is not used in this setup.")
+
+if source_build_morse:
+    libmorse = os.path.join(OUT_DIR, "libmorse_source.a")
+else:
+    if not os.path.isfile(HALOW_LIB_LOCAL):
+        _download_file(HALOW_LIB_URL, HALOW_LIB_LOCAL)
+    libmorse = HALOW_LIB_LOCAL
 print(f"Using Morse archive: {'source build' if source_build_morse else libmorse}")
 
-include_dirs = [
-    os.path.join(SDK_MORSELIB, "include"),
-    os.path.join(SDK_MORSELIB, "src"),
-    os.path.join(SDK_MORSELIB, "src", "internal"),
-    os.path.join(SDK_SHIMS, "include", target),
-    os.path.join(SDK_SRC, "mmutils"),
-    os.path.join(SDK_SRC, "mmpktmem"),
-    os.path.join(SDK_SRC, "mmregdb"),
-    os.path.join(SDK_SRC, "mmipal"),
-    os.path.join(SDK_SRC, "mmipal", "lwip"),
-    SDK_SRC,
-    os.path.join(SDK_SRC, "hostap"),
-    os.path.join(SDK_SRC, "hostap", "src"),
-    os.path.join(SDK_SRC, "hostap", "src", "common"),
-    os.path.join(SDK_SRC, "hostap", "src", "utils"),
-    os.path.join(SDK_SRC, "hostap", "wpa_supplicant"),
-    os.path.join(SDK_MORSELIB, "mmrc", "src", "core"),
-    os.path.join(SDK_MORSELIB, "src", "umac", "rc", "mmrc_osal"),
-]
-
-shim_sources = [
-    os.path.join(SDK_SHIMS, "mmosal_shim_freertos_esp32.c"),
-    os.path.join(SDK_SHIMS, "mmhal_core.c"),
-    os.path.join(SDK_SHIMS, "mmhal_os.c"),
-    os.path.join(SDK_SHIMS, "mmhal_wlan.c"),
-    os.path.join(SDK_SHIMS, "mmhal_wlan_binaries.c"),
-    os.path.join(SDK_SHIMS, "crypto_mbedtls_mm.c"),
-    os.path.join(SDK_SRC, "mmpktmem", "mmpktmem_heap.c"),
-    os.path.join(SDK_SRC, "mmutils", "mmbuf.c"),
-    os.path.join(SDK_SRC, "mmutils", "mmcrc.c"),
-    os.path.join(SDK_SRC, "mmutils", "mmutils_wlan.c"),
-    os.path.join(SDK_SRC, "mmregdb", "mmregdb.c"),
-]
+include_dirs = [LOCAL_INCLUDE_DIR, LOCAL_SOURCE_DIR]
+if source_build_morse:
+    include_dirs.extend(
+        [
+            os.path.join(SDK_MORSELIB, "include"),
+            os.path.join(SDK_MORSELIB, "src"),
+            os.path.join(SDK_MORSELIB, "src", "internal"),
+            os.path.join(SDK_SHIMS, "include", target),
+            os.path.join(SDK_SRC, "mmutils"),
+            os.path.join(SDK_SRC, "mmpktmem"),
+            os.path.join(SDK_SRC, "mmregdb"),
+            os.path.join(SDK_SRC, "mmipal"),
+            os.path.join(SDK_SRC, "mmipal", "lwip"),
+            SDK_SRC,
+            os.path.join(SDK_SRC, "hostap"),
+            os.path.join(SDK_SRC, "hostap", "src"),
+            os.path.join(SDK_SRC, "hostap", "src", "common"),
+            os.path.join(SDK_SRC, "hostap", "src", "utils"),
+            os.path.join(SDK_SRC, "hostap", "wpa_supplicant"),
+            os.path.join(SDK_MORSELIB, "mmrc", "src", "core"),
+            os.path.join(SDK_MORSELIB, "src", "umac", "rc", "mmrc_osal"),
+        ]
+    )
 
 build_env = env.Clone()
 if source_build_morse:
@@ -297,9 +303,10 @@ build_env.Append(
     ],
 )
 
+shim_sources = _glob_c(LOCAL_SOURCE_DIR)
 objects = []
 for src in shim_sources:
-    rel = os.path.relpath(src, SDK_DIR)
+    rel = os.path.relpath(src, PROJECT_DIR)
     obj = os.path.join(OUT_DIR, "obj", rel + ".o")
     objects.extend(build_env.Object(obj, src))
 

@@ -27,6 +27,25 @@ This repository contains the official device firmware for Meshtastic, an open-so
 
 Meshtastic enables text messaging, location sharing, and telemetry over a decentralized mesh network, making it ideal for outdoor adventures, emergency preparedness, and remote operations.
 
+### Wi-Fi HaLow (EdgeZ)
+
+The Wi-Fi HaLow mesh networking stack in this firmware is powered by the EdgeZ HaLow SDK, which is provided under a non-commercial license.
+
+We no longer use the legacy EdgeZ submodule approach. ESP32-S3 builds now link against the precompiled static library:
+
+- [libedgez-esp32s3.a (v0.0.3)](https://github.com/edgez-ai/halow-sdk/releases/download/v0.0.3/libedgez-esp32s3.a)
+- [EdgeZ HaLow SDK release page](https://github.com/edgez-ai/halow-sdk/releases/tag/v0.0.3)
+
+### Build step for HaLow static library
+
+The build automatically downloads the static library when missing, and the firmware build links it during PlatformIO library generation. To pre-fetch manually:
+
+```bash
+mkdir -p lib/MorseWlan/lib/esp32-xtensa-lx7
+curl -fL -o lib/MorseWlan/lib/esp32-xtensa-lx7/libedgez-esp32s3.a \
+  https://github.com/edgez-ai/halow-sdk/releases/download/v0.0.3/libedgez-esp32s3.a
+```
+
 ### Get Started
 
 - 🔧 **[Building Instructions](https://meshtastic.org/docs/development/firmware/build)** – Learn how to compile the firmware from source.

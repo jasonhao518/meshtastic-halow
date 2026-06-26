@@ -1,13 +1,13 @@
 {
   "name": "MorseWlan",
   "version": "0.1.0",
-  "description": "PlatformIO wrapper for the third_party/mm-iot-esp32 Morse Micro SDK.",
+  "description": "PlatformIO wrapper for the EdgeZ HaLow SDK static library.",
   "frameworks": ["arduino", "espidf"],
   "platforms": ["espressif32"],
   "build": {
     "srcDir": "src",
     "srcFilter": ["-<*>"],
-    "includeDir": "../../third_party/mm-iot-esp32/framework/morselib/include",
+    "includeDir": "include",
     "libArchive": false,
     "extraScript": "extra_script.py"
   }
