@@ -31,6 +31,10 @@
 #include "lwip/tcpip.h"
 #include "lwip/udp.h"
 
+typedef void (*netif_status_callback_fn)(struct netif *netif);
+void netif_set_link_callback(struct netif *netif, netif_status_callback_fn link_callback);
+void netif_set_status_callback(struct netif *netif, netif_status_callback_fn status_callback);
+
 static struct mmipal_data {
     struct netif lwip_mmnetif;
     /** This stores the IPv4 link state for the IP stack. I.e., do we have an IP address or not. */
