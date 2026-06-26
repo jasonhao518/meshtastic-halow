@@ -223,7 +223,7 @@ enum mmipal_ip6_addr_mode {
 };
 
 typedef char mmipal_ip_addr_t[MMIPAL_IPADDR_STR_MAXLEN];
-#define MMIPAL_IPV6_ADDR_COUNT 10
+#define MMIPAL_IPV6_ADDR_COUNT 3
 
 struct mmipal_ip_config {
     enum mmipal_addr_mode mode;
@@ -234,7 +234,7 @@ struct mmipal_ip_config {
 
 struct mmipal_ip6_config {
     enum mmipal_ip6_addr_mode ip6_mode;
-    mmipal_ip_addr_t ip6_addr[MMIPAL_IPV6_ADDR_COUNT][MMIPAL_IPADDR_STR_MAXLEN];
+    char ip6_addr[MMIPAL_IPV6_ADDR_COUNT][MMIPAL_IPADDR_STR_MAXLEN];
 };
 
 struct mmipal_link_status {

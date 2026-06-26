@@ -156,7 +156,7 @@ static void tx_data_pool_pkt_free(void *mmpkt)
     if (pktmem.tx_data_pool_allocated < TX_DATA_POOL_UNPAUSE_THRESHOLD) {
         atomic_uint_fast8_t old_tx_paused = atomic_exchange(&pktmem.tx_data_pool_tx_paused, 0);
         if (old_tx_paused) {
-            pktmem.tx_flow_control_cb(MMWLAN_TX_READY);
+            pktmem.tx_flow_control_cb();
         }
     }
 }
@@ -199,7 +199,7 @@ struct mmpkt *mmhal_wlan_alloc_mmpkt_for_tx(uint8_t pkt_class, uint32_t space_at
     if (pktmem.tx_data_pool_allocated > TX_DATA_POOL_PAUSE_THRESHOLD) {
         atomic_uint_fast8_t old_tx_paused = atomic_exchange(&pktmem.tx_data_pool_tx_paused, 1);
         if (!old_tx_paused) {
-            pktmem.tx_flow_control_cb(MMWLAN_TX_PAUSED);
+            pktmem.tx_flow_control_cb();
         }
     }
 
@@ -216,10 +216,11 @@ static void rx_pkt_free(void *mmpkt)
 
 static const struct mmpkt_ops mmpkt_rx_ops = {.free_mmpkt = rx_pkt_free};
 
-struct mmpkt *mmhal_wlan_alloc_mmpkt_for_rx(uint32_t capacity, uint32_t metadata_length)
+struct mmpkt *mmhal_wlan_alloc_mmpkt_for_rx(uint8_t pkt_class, uint32_t capacity, uint32_t metadata_length)
 {
     atomic_int_least32_t old_value;
     struct mmpkt *mmpkt;
+    (void)pkt_class;
 
     old_value = atomic_fetch_add(&pktmem.rx_pool_allocated, 1);
 
