@@ -15,7 +15,6 @@ Import("env")
 
 PROJECT_DIR = env.subst("$PROJECT_DIR")
 BUILD_DIR = env.subst("$BUILD_DIR")
-SDK_DIR = os.path.join(PROJECT_DIR, "third_party", "mm-iot-esp32", "framework")
 LIBMORSE_DIR = os.path.join(PROJECT_DIR, "lib", "MorseWlan", "lib", "esp32-xtensa-lx7")
 LOCAL_SOURCE_DIR = os.path.join(PROJECT_DIR, "lib", "MorseWlan", "src")
 LOCAL_INCLUDE_DIR = os.path.join(PROJECT_DIR, "lib", "MorseWlan", "include")
@@ -29,10 +28,6 @@ HALOW_LIB_URL = (
 )
 HALOW_LIB_ZIP_LOCAL = os.path.join(LIBMORSE_DIR, HALOW_LIB_ZIP_NAME)
 HALOW_LIB_LOCAL = os.path.join(LIBMORSE_DIR, HALOW_LIB_NAME)
-SDK_MORSELIB = os.path.join(SDK_DIR, "morselib")
-SDK_SHIMS = os.path.join(SDK_DIR, "mm_shims")
-SDK_SRC = os.path.join(SDK_DIR, "src")
-SDK_FIRMWARE = os.path.join(SDK_DIR, "morsefirmware")
 OUT_DIR = os.path.join(BUILD_DIR, "mm_iot_esp32")
 
 
@@ -55,7 +50,6 @@ def _find_blob(name):
     basename = os.path.basename(name)
     roots = [
         os.path.join(PROJECT_DIR, "morsefirmware"),
-        SDK_FIRMWARE,
         os.path.join(PROJECT_DIR, "lib", "MorseWlan", "src"),
     ]
     for root in roots:
@@ -67,7 +61,7 @@ def _find_blob(name):
             object_name = basename + ".o"
             if object_name in filenames:
                 return os.path.join(dirpath, object_name)
-    return os.path.join(SDK_FIRMWARE, basename)
+    return os.path.join(PROJECT_DIR, "lib", "MorseWlan", "src", basename)
 
 
 def _binary_symbol(path, suffix):
@@ -331,40 +325,6 @@ def _build_archive(target, source, env):
         _run([ranlib, target_path])
 
 
-def _build_source_archive(target, source, env):
-    target_path = str(target[0])
-    objects = [str(s) for s in source]
-    ar = env.subst("$AR")
-    ranlib = env.subst("$RANLIB")
-    objcopy = _toolchain_program("objcopy")
-    toolchain_base = objcopy[:-len("objcopy")] if objcopy.endswith("objcopy") else ""
-    mangler = os.path.join(SDK_DIR, "tools", "buildsystem", "librarymangler.py")
-    protected_syms = os.path.join(SDK_DIR, "tools", "metadata", "protected_syms.txt")
-    metadata_dir = os.path.join(OUT_DIR, "mangle")
-
-    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-    script = ["CREATE " + target_path]
-    script.extend("ADDMOD " + obj for obj in objects)
-    script.extend(["SAVE", "END"])
-    print(f"Creating source-built Morse archive: {target_path}")
-    proc = subprocess.Popen([ar, "-M"], stdin=subprocess.PIPE)
-    proc.communicate(("\n".join(script) + "\n").encode())
-    if proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, [ar, "-M"])
-    if ranlib:
-        _run([ranlib, target_path])
-
-    protected_args = []
-    with open(protected_syms) as f:
-        for line in f:
-            sym = line.strip()
-            if sym and not sym.startswith("#"):
-                protected_args.extend(["-p", sym])
-    _run([mangler, "-t", toolchain_base, "-m", metadata_dir] + protected_args + [target_path])
-    if ranlib:
-        _run([ranlib, target_path])
-
-
 def _glob_c(root):
     matches = []
     for dirpath, _, filenames in os.walk(root):
@@ -374,64 +334,15 @@ def _glob_c(root):
     return sorted(matches)
 
 
-def _hostap_sources():
-    cmake = os.path.join(SDK_SRC, "hostap", "CMakeLists.txt")
-    with open(cmake) as f:
-        content = f.read()
-    return [
-        os.path.join(SDK_SRC, "hostap", path)
-        for path in re.findall(r'"([^"]+\.c)"', content)
-    ]
-
-
-def _strip_lto_flags(build_env):
-    for key in ("CCFLAGS", "CFLAGS", "CXXFLAGS", "ASFLAGS"):
-        flags = build_env.get(key, [])
-        build_env[key] = [flag for flag in flags if not str(flag).startswith("-flto")]
-
-
-target = "esp32s3"
-source_build_morse = _define_enabled("CONFIG_BUILD_MORSELIB_FROM_SOURCE")
-if source_build_morse and not os.path.isdir(SDK_DIR):
-    raise RuntimeError("CONFIG_BUILD_MORSELIB_FROM_SOURCE requires the legacy mm-iot-esp32 source tree, which is not used in this setup.")
-
-if source_build_morse:
-    libmorse = os.path.join(OUT_DIR, "libmorse_source.a")
-else:
-    _ensure_halow_archive()
-    libmorse = HALOW_LIB_LOCAL
-print(f"Using Morse archive: {'source build' if source_build_morse else libmorse}")
+_ensure_halow_archive()
+libmorse = HALOW_LIB_LOCAL
+print(f"Using Morse archive: {libmorse}")
 
 include_dirs = [LOCAL_INCLUDE_DIR, LOCAL_SOURCE_DIR]
-if source_build_morse:
-    include_dirs.extend(
-        [
-            os.path.join(SDK_MORSELIB, "include"),
-            os.path.join(SDK_MORSELIB, "src"),
-            os.path.join(SDK_MORSELIB, "src", "internal"),
-            os.path.join(SDK_SHIMS, "include", target),
-            os.path.join(SDK_SRC, "mmutils"),
-            os.path.join(SDK_SRC, "mmpktmem"),
-            os.path.join(SDK_SRC, "mmregdb"),
-            os.path.join(SDK_SRC, "mmipal"),
-            os.path.join(SDK_SRC, "mmipal", "lwip"),
-            SDK_SRC,
-            os.path.join(SDK_SRC, "hostap"),
-            os.path.join(SDK_SRC, "hostap", "src"),
-            os.path.join(SDK_SRC, "hostap", "src", "common"),
-            os.path.join(SDK_SRC, "hostap", "src", "utils"),
-            os.path.join(SDK_SRC, "hostap", "wpa_supplicant"),
-            os.path.join(SDK_MORSELIB, "mmrc", "src", "core"),
-            os.path.join(SDK_MORSELIB, "src", "umac", "rc", "mmrc_osal"),
-        ]
-    )
-else:
-    include_dirs.append(HALOW_INCLUDE_LOCAL)
-    _ensure_mmap_h_compat()
+include_dirs.append(HALOW_INCLUDE_LOCAL)
+_ensure_mmap_h_compat()
 
 build_env = env.Clone()
-if source_build_morse:
-    _strip_lto_flags(build_env)
 build_env.Prepend(CPPPATH=include_dirs)
 build_env.Append(
     CPPDEFINES=[
@@ -508,23 +419,7 @@ for src in shim_sources:
     obj = os.path.join(OUT_DIR, "obj", rel + ".o")
     objects.extend(build_env.Object(obj, src))
 
-if source_build_morse:
-    morse_sources = _glob_c(os.path.join(SDK_MORSELIB, "src"))
-    morse_sources.extend(_glob_c(os.path.join(SDK_MORSELIB, "mmrc", "src", "core")))
-    if not _define_enabled("CONFIG_WPA_DPP_SUPPORT"):
-        dpp_source = os.path.join(SDK_MORSELIB, "src", "umac", "supplicant_shim", "morse_dpp_event.c")
-        morse_sources = [src for src in morse_sources if src != dpp_source]
-    morse_sources.extend(_hostap_sources())
-
-    morse_objects = []
-    for src in morse_sources:
-        rel = os.path.relpath(src, SDK_DIR)
-        obj = os.path.join(OUT_DIR, "morselib_obj", rel + ".o")
-        morse_objects.extend(build_env.Object(obj, src))
-
-    libmorse_node = env.Command(libmorse, morse_objects, _build_source_archive)
-else:
-    libmorse_node = [libmorse]
+libmorse_node = [libmorse]
 
 archive = os.path.join(OUT_DIR, "libmm_iot_esp32.a")
 archive_node = env.Command(archive, list(libmorse_node) + objects, _build_archive)
