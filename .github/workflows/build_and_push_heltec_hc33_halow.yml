@@ -27,22 +27,12 @@ jobs:
         shell: bash
 
     env:
-      TARGET_RELEASE_REPO: edgez-ai/edge-device-esp32
+      # External release publishing handled separately. This workflow now only
+      # builds and uploads local workflow artifacts.
+      BUILD_ONLY: true
 
     steps:
-      - name: Validate token for private submodules and external publish
-        env:
-          GH_PERSONAL_ACCESS_TOKEN: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-        run: |
-          if [[ -z "${GH_PERSONAL_ACCESS_TOKEN:-}" ]]; then
-            echo "::error::GH_PERSONAL_ACCESS_TOKEN is required for private submodule checkout and external repository publishing."
-            exit 1
-          fi
-
       - uses: actions/checkout@v6
-        with:
-          token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          submodules: recursive
 
       - name: Set up Python and dependencies
         uses: actions/setup-python@v6
@@ -60,8 +50,6 @@ jobs:
 
       - name: Package merged binary as meshtastic.bin
         id: package
-        env:
-          GH_TOKEN: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
           VERSION="$(./bin/buildinfo.py long)"
@@ -78,19 +66,6 @@ jobs:
 
           RELEASE_TAG="${{ inputs.release_tag }}"
           if [[ -z "$RELEASE_TAG" ]]; then
-            if [[ -z "${GH_TOKEN:-}" ]]; then
-              echo "::error::GH_PERSONAL_ACCESS_TOKEN is required when release_tag is empty to resolve latest release."
-              exit 1
-            fi
-
-            RELEASE_TAG="$(gh api repos/${TARGET_RELEASE_REPO}/releases/latest --jq .tag_name)"
-            if [[ -z "$RELEASE_TAG" || "$RELEASE_TAG" == "null" ]]; then
-              echo "::error::Unable to resolve latest release tag from ${TARGET_RELEASE_REPO}."
-              exit 1
-            fi
-          fi
-
-          if [[ -z "$RELEASE_TAG" ]]; then
             RELEASE_TAG="v${VERSION}"
           fi
           RELEASE_TAG="${RELEASE_TAG#refs/tags/}"
@@ -103,32 +78,3 @@ jobs:
           path: ${{ steps.package.outputs.firmware }}
           if-no-files-found: error
           retention-days: 30
-
-      - name: Check publish token availability
-        id: publish_guard
-        run: |
-          if [ -z "${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}" ]; then
-            echo "publish_enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::GH_PERSONAL_ACCESS_TOKEN is not set. Skipping publish to ${TARGET_RELEASE_REPO}."
-          else
-            echo "publish_enabled=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Verify target repository access
-        if: steps.publish_guard.outputs.publish_enabled == 'true'
-        run: |
-          if ! git ls-remote --exit-code "https://x-access-token:${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}@github.com/${TARGET_RELEASE_REPO}.git" HEAD >/dev/null 2>&1; then
-            echo "::error::GH_PERSONAL_ACCESS_TOKEN cannot access ${TARGET_RELEASE_REPO} (need Contents: Write and org SSO authorization if required)."
-            exit 1
-          fi
-
-      - name: Push merged bin to edge-device-esp32 release
-        if: steps.publish_guard.outputs.publish_enabled == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          repository: ${{ env.TARGET_RELEASE_REPO }}
-          token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          tag_name: ${{ steps.package.outputs.release_tag }}
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          files: ${{ steps.package.outputs.firmware }}
