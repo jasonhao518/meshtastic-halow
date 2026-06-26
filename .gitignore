@@ -70,3 +70,5 @@ bin/_generated/
 !lib/MorseWlan/lib/**/*.a
 !lib/MorseWlan/src/*.mbin.o
 lib/MorseWlan/lib/esp32-xtensa-lx7/libedgez-esp32s3.a
+lib/MorseWlan/lib/esp32-xtensa-lx7/libedgez-esp32s3.zip
+lib/MorseWlan/lib/esp32-xtensa-lx7/include
