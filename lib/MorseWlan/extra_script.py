@@ -412,7 +412,7 @@ build_env.Append(
     ],
 )
 
-shim_sources = _glob_c(LOCAL_SOURCE_DIR)
+shim_sources = [os.path.join(LOCAL_SOURCE_DIR, "lwip_compat_shim.c")]
 objects = []
 for src in shim_sources:
     rel = os.path.relpath(src, PROJECT_DIR)
